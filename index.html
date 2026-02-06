@@ -1,0 +1,1614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code Session Visualizer</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+:root {
+  --bg: #0f0f1a;
+  --bg-panel: #141425;
+  --bg-card: #1a1a35;
+  --bg-card-active: #222245;
+  --text: #d0d0e0;
+  --text-dim: #6a6a8a;
+  --text-bright: #f0f0ff;
+  --border: #2a2a45;
+  --accent-user: #4a90d9;
+  --accent-read: #27ae60;
+  --accent-write: #e67e22;
+  --accent-edit: #f1c40f;
+  --accent-bash: #e74c3c;
+  --accent-search: #9b59b6;
+  --accent-task: #e84393;
+  --accent-web: #00b894;
+  --accent-file: #74b9ff;
+  --accent-text: #b0b0cc;
+  --accent-thinking: #555577;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Landing ── */
+#landing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: var(--bg);
+}
+
+#drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: 16px;
+  padding: 80px 60px;
+  text-align: center;
+  max-width: 560px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+#drop-zone:hover, #drop-zone.drag-over {
+  border-color: var(--accent-user);
+  background: rgba(74, 144, 217, 0.05);
+}
+
+#drop-zone h1 {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 12px;
+  letter-spacing: -0.5px;
+}
+
+#drop-zone p {
+  font-size: 14px;
+  color: var(--text-dim);
+  margin-bottom: 24px;
+}
+
+#drop-zone .hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 16px;
+  opacity: 0.7;
+}
+
+#file-input {
+  display: none;
+}
+
+#drop-zone label {
+  display: inline-block;
+  padding: 10px 24px;
+  background: var(--accent-user);
+  color: #fff;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+#drop-zone label:hover { opacity: 0.85; }
+
+/* ── App Layout ── */
+#app {
+  display: grid;
+  grid-template-rows: 44px 1fr 28px;
+  height: 100vh;
+}
+
+#app.hidden { display: none; }
+
+/* ── Controls ── */
+#controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.control-group.transport button {
+  width: 32px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+
+.control-group.transport button:hover {
+  background: var(--bg-card-active);
+  border-color: var(--accent-user);
+}
+
+.control-group.transport button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.control-group.transport button.playing {
+  background: var(--accent-user);
+  border-color: var(--accent-user);
+  color: #fff;
+}
+
+.control-group.speed label {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.control-group.speed input[type="range"] {
+  width: 80px;
+  accent-color: var(--accent-user);
+  height: 4px;
+}
+
+#speed-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  min-width: 36px;
+}
+
+.control-group.progress {
+  flex: 1;
+  gap: 8px;
+}
+
+#step-counter {
+  color: var(--text-dim);
+  font-size: 11px;
+  min-width: 70px;
+  white-space: nowrap;
+}
+
+#progress-slider {
+  flex: 1;
+  accent-color: var(--accent-user);
+  height: 4px;
+}
+
+.control-group.meta {
+  gap: 10px;
+}
+
+#session-info {
+  color: var(--text-dim);
+  font-size: 10px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#btn-reset {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+#btn-reset:hover {
+  background: var(--bg-card-active);
+  color: var(--text);
+}
+
+/* ── Main Split ── */
+#main {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  overflow: hidden;
+}
+
+/* ── Message Log ── */
+#message-log {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+#message-log h2 {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  padding: 8px 12px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+#messages-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+#messages-container::-webkit-scrollbar {
+  width: 5px;
+}
+
+#messages-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#messages-container::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.msg-entry {
+  padding: 6px 8px;
+  margin-bottom: 2px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  transition: opacity 0.3s, background 0.2s;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+.msg-entry:hover {
+  background: var(--bg-card);
+}
+
+.msg-entry.active {
+  background: var(--bg-card-active);
+  border-left-color: var(--accent-user);
+}
+
+.msg-entry.dimmed {
+  opacity: 0.45;
+}
+
+.msg-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.msg-role {
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.msg-role.user { color: var(--accent-user); }
+.msg-role.assistant { color: var(--accent-text); }
+.msg-role.result { color: var(--text-dim); }
+.msg-role.thinking { color: var(--accent-thinking); }
+
+.msg-time {
+  color: var(--text-dim);
+  font-size: 10px;
+  margin-left: auto;
+}
+
+.msg-body {
+  color: var(--text);
+  word-break: break-word;
+  white-space: pre-wrap;
+  max-height: 80px;
+  overflow: hidden;
+}
+
+.msg-body code {
+  color: var(--text-bright);
+  font-size: 10.5px;
+}
+
+.result-body {
+  color: var(--text-dim);
+  font-size: 10px;
+  max-height: 40px;
+}
+
+.thinking-body {
+  color: var(--accent-thinking);
+  font-style: italic;
+  font-size: 10px;
+  max-height: 40px;
+}
+
+.tool-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.3px;
+}
+
+.tool-badge.tool-read { background: var(--accent-read); }
+.tool-badge.tool-write { background: var(--accent-write); }
+.tool-badge.tool-edit { background: var(--accent-edit); color: #111; }
+.tool-badge.tool-bash { background: var(--accent-bash); }
+.tool-badge.tool-grep, .tool-badge.tool-glob { background: var(--accent-search); }
+.tool-badge.tool-task { background: var(--accent-task); }
+.tool-badge.tool-webfetch, .tool-badge.tool-websearch { background: var(--accent-web); }
+.tool-badge.tool-notebookedit { background: var(--accent-edit); color: #111; }
+.tool-badge.tool-default { background: var(--text-dim); }
+
+/* ── Graph ── */
+#graph-container {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+#graph {
+  width: 100%;
+  height: 100%;
+}
+
+.node-group { cursor: grab; }
+.node-group:active { cursor: grabbing; }
+
+.node-label {
+  fill: var(--text-bright);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 9px;
+  text-anchor: middle;
+  pointer-events: none;
+  dominant-baseline: central;
+}
+
+.node-sublabel {
+  fill: var(--text-dim);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 7px;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.edge-line {
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.edge-flow {
+  stroke: var(--border);
+  stroke-dasharray: 4 3;
+  stroke-width: 1;
+  opacity: 0.4;
+}
+
+.edge-file-read { stroke: var(--accent-read); opacity: 0.6; }
+.edge-file-write { stroke: var(--accent-write); opacity: 0.6; }
+.edge-file-edit { stroke: var(--accent-edit); opacity: 0.6; }
+.edge-file-search { stroke: var(--accent-search); opacity: 0.6; }
+.edge-file-bash { stroke: var(--accent-bash); opacity: 0.4; }
+.edge-file-default { stroke: var(--text-dim); opacity: 0.4; }
+
+/* ── Legend ── */
+#legend {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  background: rgba(20, 20, 37, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-dim);
+  max-width: 360px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legend-rect {
+  width: 12px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ── Tooltip ── */
+#tooltip {
+  position: fixed;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text);
+  max-width: 400px;
+  pointer-events: none;
+  z-index: 100;
+  display: none;
+  line-height: 1.5;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+
+#tooltip .tt-title {
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 2px;
+}
+
+#tooltip .tt-detail {
+  color: var(--text-dim);
+  font-size: 10px;
+  word-break: break-all;
+}
+
+/* ── Stats Bar ── */
+#stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.stat-value {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  #main {
+    grid-template-columns: 1fr;
+    grid-template-rows: 200px 1fr;
+  }
+  #message-log {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+</style>
+</head>
+<body>
+
+<div id="landing">
+  <div id="drop-zone">
+    <h1>Claude Code Session Visualizer</h1>
+    <p>Watch a Claude Code session replay as an animated graph</p>
+    <label for="file-input">Choose .jsonl file</label>
+    <input type="file" id="file-input" accept=".jsonl">
+    <div class="hint">or drag &amp; drop a session file from ~/.claude/projects/</div>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header id="controls">
+    <div class="control-group transport">
+      <button id="btn-start" title="Jump to start (Home)">&#9198;</button>
+      <button id="btn-prev" title="Step back (Left)">&#9664;</button>
+      <button id="btn-play" title="Play/Pause (Space)">&#9654;</button>
+      <button id="btn-next" title="Step forward (Right)">&#9654;</button>
+      <button id="btn-end" title="Jump to end (End)">&#9197;</button>
+    </div>
+    <div class="control-group speed">
+      <label>Speed</label>
+      <input type="range" id="speed-slider" min="50" max="2000" value="600" step="50">
+      <span id="speed-label">600ms</span>
+    </div>
+    <div class="control-group progress">
+      <span id="step-counter">0 / 0</span>
+      <input type="range" id="progress-slider" min="0" max="0" value="0">
+    </div>
+    <div class="control-group meta">
+      <span id="session-info"></span>
+      <button id="btn-reset">Reset</button>
+    </div>
+  </header>
+
+  <div id="main">
+    <aside id="message-log">
+      <h2>Activity Log</h2>
+      <div id="messages-container"></div>
+    </aside>
+    <div id="graph-container">
+      <svg id="graph"></svg>
+      <div id="legend"></div>
+    </div>
+  </div>
+
+  <footer id="stats-bar">
+    <span>Tokens: <span class="stat-value" id="stat-tokens">0 in / 0 out</span></span>
+    <span>Files: <span class="stat-value" id="stat-files">0</span></span>
+    <span>Tools: <span class="stat-value" id="stat-tools">0</span></span>
+    <span>Duration: <span class="stat-value" id="stat-duration">-</span></span>
+  </footer>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+// ─────────────────────────────────────────────
+// SessionParser
+// ─────────────────────────────────────────────
+class SessionParser {
+  parse(text) {
+    const lines = text.split('\n').filter(l => l.trim());
+    const entries = [];
+    for (const line of lines) {
+      try { entries.push(JSON.parse(line)); } catch (e) { /* skip malformed */ }
+    }
+
+    const session = {
+      sessionId: '',
+      version: '',
+      cwd: '',
+      model: '',
+      steps: [],
+      totalTokens: { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 },
+    };
+
+    let stepIndex = 0;
+
+    for (const entry of entries) {
+      // Skip non-visualizable
+      if (['progress', 'file-history-snapshot', 'queue-operation', 'system'].includes(entry.type)) continue;
+
+      // Capture session metadata
+      if (!session.sessionId && entry.sessionId) session.sessionId = entry.sessionId;
+      if (!session.version && entry.version) session.version = entry.version;
+      if (!session.cwd && entry.cwd) session.cwd = entry.cwd;
+
+      const msg = entry.message;
+      if (!msg) continue;
+
+      // Capture model
+      if (msg.model && !session.model) session.model = msg.model;
+
+      // Accumulate tokens
+      if (msg.usage) {
+        session.totalTokens.input += msg.usage.input_tokens || 0;
+        session.totalTokens.output += msg.usage.output_tokens || 0;
+        session.totalTokens.cacheCreation += msg.usage.cache_creation_input_tokens || 0;
+        session.totalTokens.cacheRead += msg.usage.cache_read_input_tokens || 0;
+      }
+
+      const ts = entry.timestamp ? new Date(entry.timestamp) : null;
+
+      if (entry.type === 'user') {
+        // User message: could be text or tool_result(s)
+        if (typeof msg.content === 'string') {
+          session.steps.push({
+            index: stepIndex++, type: 'user_message', timestamp: ts,
+            uuid: entry.uuid, text: msg.content, tokens: null,
+          });
+        } else if (Array.isArray(msg.content)) {
+          // Check for text
+          const textBlocks = msg.content.filter(b => b.type === 'text');
+          const resultBlocks = msg.content.filter(b => b.type === 'tool_result');
+
+          if (textBlocks.length > 0) {
+            const combinedText = textBlocks.map(b => b.text).join('\n');
+            if (combinedText.trim()) {
+              session.steps.push({
+                index: stepIndex++, type: 'user_message', timestamp: ts,
+                uuid: entry.uuid, text: combinedText, tokens: null,
+              });
+            }
+          }
+
+          for (const rb of resultBlocks) {
+            const preview = typeof rb.content === 'string' ? rb.content : JSON.stringify(rb.content);
+            session.steps.push({
+              index: stepIndex++, type: 'tool_result', timestamp: ts,
+              uuid: entry.uuid, toolUseId: rb.tool_use_id,
+              resultPreview: preview.slice(0, 500),
+              isError: rb.is_error || false, tokens: null,
+            });
+          }
+        }
+      } else if (entry.type === 'assistant') {
+        if (!msg.content || !Array.isArray(msg.content)) continue;
+
+        const tokenInfo = msg.usage ? {
+          input: msg.usage.input_tokens || 0,
+          output: msg.usage.output_tokens || 0,
+        } : null;
+
+        for (const block of msg.content) {
+          if (block.type === 'thinking' && block.thinking) {
+            session.steps.push({
+              index: stepIndex++, type: 'thinking', timestamp: ts,
+              uuid: entry.uuid, thinkingPreview: block.thinking.slice(0, 300),
+              tokens: null,
+            });
+          } else if (block.type === 'text' && block.text && block.text.trim()) {
+            session.steps.push({
+              index: stepIndex++, type: 'assistant_text', timestamp: ts,
+              uuid: entry.uuid, text: block.text, tokens: tokenInfo,
+            });
+          } else if (block.type === 'tool_use') {
+            const filePaths = this.extractFilePaths(block.name, block.input || {});
+            session.steps.push({
+              index: stepIndex++, type: 'tool_use', timestamp: ts,
+              uuid: entry.uuid, toolName: block.name,
+              toolUseId: block.id, input: block.input || {},
+              filePaths, tokens: tokenInfo,
+            });
+          }
+        }
+      }
+    }
+
+    return session;
+  }
+
+  extractFilePaths(toolName, input) {
+    const paths = [];
+    switch (toolName) {
+      case 'Read':
+      case 'Write':
+      case 'NotebookEdit':
+        if (input.file_path) paths.push(input.file_path);
+        if (input.notebook_path) paths.push(input.notebook_path);
+        break;
+      case 'Edit':
+        if (input.file_path) paths.push(input.file_path);
+        break;
+      case 'Glob':
+        if (input.path) paths.push(input.path);
+        break;
+      case 'Grep':
+        if (input.path) paths.push(input.path);
+        break;
+      case 'Bash':
+        paths.push(...this.extractPathsFromCommand(input.command || ''));
+        break;
+      case 'WebFetch':
+        if (input.url) paths.push(input.url);
+        break;
+    }
+    return [...new Set(paths.map(p => p.replace(/\/+$/, '')))];
+  }
+
+  extractPathsFromCommand(cmd) {
+    const paths = [];
+    // Quoted absolute paths
+    for (const m of cmd.matchAll(/"(\/[^"]{2,})"/g)) paths.push(m[1]);
+    for (const m of cmd.matchAll(/'(\/[^']{2,})'/g)) paths.push(m[1]);
+    // Unquoted absolute paths after common commands
+    for (const m of cmd.matchAll(/(?:cat|ls|cd|mkdir|rm|cp|mv|head|tail|wc|chmod|touch|python|node|git\s+\S+)\s+(\/\S+)/g)) {
+      paths.push(m[1]);
+    }
+    return paths.filter(p => p.length > 2 && !p.startsWith('/dev/'));
+  }
+}
+
+// ─────────────────────────────────────────────
+// GraphModel
+// ─────────────────────────────────────────────
+const TOOL_COLORS = {
+  Read: '#27ae60', Write: '#e67e22', Edit: '#f1c40f',
+  Bash: '#e74c3c', Grep: '#9b59b6', Glob: '#9b59b6',
+  Task: '#e84393', WebFetch: '#00b894', WebSearch: '#00b894',
+  NotebookEdit: '#f1c40f', Skill: '#e84393',
+};
+
+const TOOL_EDGE_CLASS = {
+  Read: 'edge-file-read', Write: 'edge-file-write', Edit: 'edge-file-edit',
+  Grep: 'edge-file-search', Glob: 'edge-file-search',
+  Bash: 'edge-file-bash',
+};
+
+function toolColor(name) {
+  return TOOL_COLORS[name] || '#6a6a8a';
+}
+
+function fileId(path) {
+  return 'file-' + path.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 80);
+}
+
+function basename(p) {
+  if (!p) return '?';
+  if (p.startsWith('http')) {
+    try { return new URL(p).hostname; } catch { return p.slice(0, 30); }
+  }
+  const parts = p.split('/');
+  return parts[parts.length - 1] || parts[parts.length - 2] || p.slice(-20);
+}
+
+function shortenPath(p) {
+  if (!p) return '';
+  if (p.startsWith('http')) return p;
+  const parts = p.split('/');
+  if (parts.length <= 3) return p;
+  return '.../' + parts.slice(-3).join('/');
+}
+
+class GraphModel {
+  constructor() { this.reset(); }
+
+  reset() {
+    this.nodes = [];
+    this.edges = [];
+    this.nodeMap = new Map();
+    this.fileNodes = new Map();
+    this.lastToolNodeId = null;
+    this.stepFilesSeen = new Set();
+  }
+
+  addStepNodes(step) {
+    if (step.type === 'tool_use') {
+      const nodeId = `step-${step.index}`;
+      const node = {
+        id: nodeId, type: `tool:${step.toolName}`, label: step.toolName,
+        sublabel: this.toolSublabel(step), color: toolColor(step.toolName),
+        stepIndex: step.index, shape: 'circle', r: 18,
+      };
+      this.nodes.push(node);
+      this.nodeMap.set(nodeId, node);
+
+      // Flow edge from previous tool
+      if (this.lastToolNodeId) {
+        this.edges.push({
+          source: this.lastToolNodeId, target: nodeId,
+          type: 'flow', stepIndex: step.index, edgeClass: 'edge-flow',
+        });
+      }
+      this.lastToolNodeId = nodeId;
+
+      // File edges
+      for (const fp of step.filePaths) {
+        const fid = fileId(fp);
+        if (!this.fileNodes.has(fid)) {
+          const fnode = {
+            id: fid, type: 'file', label: basename(fp), fullPath: fp,
+            sublabel: shortenPath(fp), color: '#74b9ff',
+            stepIndex: step.index, shape: 'rect',
+            readCount: 0, writeCount: 0, editCount: 0,
+          };
+          this.nodes.push(fnode);
+          this.nodeMap.set(fid, fnode);
+          this.fileNodes.set(fid, fnode);
+        }
+        // Update file stats
+        const fnode = this.fileNodes.get(fid);
+        if (step.toolName === 'Read' || step.toolName === 'Grep' || step.toolName === 'Glob') fnode.readCount++;
+        else if (step.toolName === 'Write') fnode.writeCount++;
+        else if (step.toolName === 'Edit') fnode.editCount++;
+
+        const edgeClass = TOOL_EDGE_CLASS[step.toolName] || 'edge-file-default';
+        this.edges.push({
+          source: nodeId, target: fid,
+          type: 'file_ref', stepIndex: step.index, edgeClass,
+        });
+      }
+    } else if (step.type === 'user_message') {
+      // Reset flow chain on new user message
+      this.lastToolNodeId = null;
+    } else if (step.type === 'tool_result') {
+      // Mark matching tool node as completed
+      for (const n of this.nodes) {
+        if (n.type.startsWith('tool:') && this.nodeMap.get(n.id)) {
+          // Find by matching the previous tool_use step
+          // tool_results immediately follow their tool_use
+        }
+      }
+    }
+  }
+
+  toolSublabel(step) {
+    const inp = step.input;
+    switch (step.toolName) {
+      case 'Read': return basename(inp.file_path);
+      case 'Write': return basename(inp.file_path);
+      case 'Edit': return basename(inp.file_path);
+      case 'Bash': return (inp.command || '').slice(0, 30);
+      case 'Grep': return `/${(inp.pattern || '').slice(0, 20)}/`;
+      case 'Glob': return (inp.pattern || '').slice(0, 25);
+      case 'WebFetch': return basename(inp.url);
+      case 'WebSearch': return (inp.query || '').slice(0, 25);
+      case 'Task': return (inp.description || inp.prompt || '').slice(0, 25);
+      default: return '';
+    }
+  }
+
+  getVisibleNodes(upToStep) {
+    return this.nodes.filter(n => n.stepIndex <= upToStep);
+  }
+
+  getVisibleEdges(upToStep) {
+    const visibleIds = new Set(this.getVisibleNodes(upToStep).map(n => n.id));
+    return this.edges.filter(e =>
+      e.stepIndex <= upToStep &&
+      visibleIds.has(typeof e.source === 'object' ? e.source.id : e.source) &&
+      visibleIds.has(typeof e.target === 'object' ? e.target.id : e.target)
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+// GraphRenderer
+// ─────────────────────────────────────────────
+class GraphRenderer {
+  constructor(svgElement) {
+    this.svg = d3.select(svgElement);
+    this.width = 0;
+    this.height = 0;
+    this.g = this.svg.append('g');
+    this.simulation = null;
+    this.currentStep = -1;
+
+    // SVG defs
+    const defs = this.svg.append('defs');
+
+    // Glow filter
+    const glow = defs.append('filter').attr('id', 'glow')
+      .attr('x', '-50%').attr('y', '-50%').attr('width', '200%').attr('height', '200%');
+    glow.append('feGaussianBlur').attr('stdDeviation', '4').attr('result', 'blur');
+    const merge = glow.append('feMerge');
+    merge.append('feMergeNode').attr('in', 'blur');
+    merge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+    // Arrow marker
+    defs.append('marker').attr('id', 'arrow').attr('viewBox', '0 0 10 6')
+      .attr('refX', 10).attr('refY', 3).attr('markerWidth', 8).attr('markerHeight', 6)
+      .attr('orient', 'auto')
+      .append('path').attr('d', 'M0,0L10,3L0,6').attr('fill', '#555577');
+
+    // Edge and node groups
+    this.edgeGroup = this.g.append('g').attr('class', 'edges');
+    this.nodeGroup = this.g.append('g').attr('class', 'nodes');
+
+    // Zoom
+    this.zoom = d3.zoom()
+      .scaleExtent([0.1, 5])
+      .on('zoom', (e) => this.g.attr('transform', e.transform));
+    this.svg.call(this.zoom);
+
+    // Track size
+    this.resizeObserver = new ResizeObserver(() => this.updateSize());
+    this.resizeObserver.observe(svgElement);
+    this.updateSize();
+  }
+
+  updateSize() {
+    const rect = this.svg.node().getBoundingClientRect();
+    this.width = rect.width;
+    this.height = rect.height;
+  }
+
+  render(nodes, edges, currentStep) {
+    this.currentStep = currentStep;
+
+    // Update simulation
+    if (!this.simulation) {
+      this.simulation = d3.forceSimulation()
+        .force('link', d3.forceLink().id(d => d.id).distance(d => d.type === 'flow' ? 60 : 100).strength(0.4))
+        .force('charge', d3.forceManyBody().strength(-250).distanceMax(400))
+        .force('center', d3.forceCenter(this.width / 2, this.height / 2).strength(0.05))
+        .force('collision', d3.forceCollide().radius(d => d.shape === 'rect' ? 50 : 25))
+        .force('x', d3.forceX(this.width / 2).strength(0.03))
+        .force('y', d3.forceY(this.height / 2).strength(0.03))
+        .alphaDecay(0.015)
+        .velocityDecay(0.35)
+        .on('tick', () => this.tick());
+    }
+
+    // Give new nodes initial positions near center or near their linked nodes
+    for (const n of nodes) {
+      if (n.x === undefined) {
+        // Position near a linked node if possible
+        const linkedEdge = edges.find(e => {
+          const sid = typeof e.source === 'object' ? e.source.id : e.source;
+          const tid = typeof e.target === 'object' ? e.target.id : e.target;
+          return tid === n.id && nodes.find(nn => nn.id === sid && nn.x !== undefined);
+        });
+        if (linkedEdge) {
+          const src = nodes.find(nn => nn.id === (typeof linkedEdge.source === 'object' ? linkedEdge.source.id : linkedEdge.source));
+          if (src && src.x !== undefined) {
+            n.x = src.x + (Math.random() - 0.5) * 80;
+            n.y = src.y + 40 + Math.random() * 40;
+          }
+        }
+        if (n.x === undefined) {
+          n.x = this.width / 2 + (Math.random() - 0.5) * 200;
+          n.y = this.height / 2 + (Math.random() - 0.5) * 200;
+        }
+      }
+    }
+
+    this.simulation.nodes(nodes);
+    this.simulation.force('link').links(edges);
+    this.simulation.alpha(0.3).restart();
+
+    // ── Edges ──
+    const edgeSel = this.edgeGroup.selectAll('.edge-line')
+      .data(edges, d => `${typeof d.source === 'object' ? d.source.id : d.source}-${typeof d.target === 'object' ? d.target.id : d.target}-${d.stepIndex}`);
+
+    edgeSel.exit().transition().duration(200).attr('opacity', 0).remove();
+
+    const edgeEnter = edgeSel.enter().append('line')
+      .attr('class', d => `edge-line ${d.edgeClass}`)
+      .attr('opacity', 0)
+      .attr('marker-end', d => d.type === 'file_ref' ? 'url(#arrow)' : null);
+
+    edgeEnter.transition().duration(300).attr('opacity', d => {
+      if (d.edgeClass === 'edge-flow') return 0.3;
+      return 0.6;
+    });
+
+    this.edgeElements = edgeEnter.merge(edgeSel);
+
+    // ── Nodes ──
+    const nodeSel = this.nodeGroup.selectAll('.node-group')
+      .data(nodes, d => d.id);
+
+    nodeSel.exit().transition().duration(200).attr('opacity', 0).remove();
+
+    const nodeEnter = nodeSel.enter().append('g')
+      .attr('class', 'node-group')
+      .attr('opacity', 0)
+      .call(d3.drag()
+        .on('start', (e, d) => {
+          if (!e.active) this.simulation.alphaTarget(0.2).restart();
+          d.fx = d.x; d.fy = d.y;
+        })
+        .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+        .on('end', (e, d) => {
+          if (!e.active) this.simulation.alphaTarget(0);
+          d.fx = null; d.fy = null;
+        })
+      );
+
+    // Append shapes
+    nodeEnter.each(function(d) {
+      const g = d3.select(this);
+      if (d.shape === 'rect') {
+        // File node
+        g.append('rect')
+          .attr('class', 'node-shape')
+          .attr('width', 100).attr('height', 26)
+          .attr('x', -50).attr('y', -13)
+          .attr('rx', 5).attr('ry', 5)
+          .attr('fill', d.color)
+          .attr('fill-opacity', 0.15)
+          .attr('stroke', d.color)
+          .attr('stroke-width', 1.5);
+        g.append('text').attr('class', 'node-label')
+          .attr('dy', 1)
+          .text(d.label.length > 14 ? d.label.slice(0, 13) + '\u2026' : d.label);
+      } else {
+        // Tool node (circle)
+        g.append('circle')
+          .attr('class', 'node-shape')
+          .attr('r', d.r || 18)
+          .attr('fill', d.color)
+          .attr('fill-opacity', 0.2)
+          .attr('stroke', d.color)
+          .attr('stroke-width', 2);
+        g.append('text').attr('class', 'node-label')
+          .attr('dy', 0.5)
+          .text(d.label.length > 6 ? d.label.slice(0, 5) : d.label);
+        if (d.sublabel) {
+          g.append('text').attr('class', 'node-sublabel')
+            .attr('dy', d.r + 12)
+            .text(d.sublabel.length > 22 ? d.sublabel.slice(0, 21) + '\u2026' : d.sublabel);
+        }
+      }
+    });
+
+    // Tooltip events
+    nodeEnter
+      .on('mouseenter', (e, d) => showTooltip(e, d))
+      .on('mousemove', (e) => moveTooltip(e))
+      .on('mouseleave', () => hideTooltip());
+
+    // Click to scroll message log
+    nodeEnter.on('click', (e, d) => {
+      if (window.appController) {
+        window.appController.seekTo(d.stepIndex);
+      }
+    });
+
+    // Animate entry
+    nodeEnter.transition().duration(400).ease(d3.easeCubicOut).attr('opacity', 1);
+
+    this.nodeElements = nodeEnter.merge(nodeSel);
+
+    // Update opacity for active step
+    this.updateHighlights(currentStep);
+  }
+
+  updateHighlights(step) {
+    if (!this.nodeElements) return;
+    this.nodeElements.each(function(d) {
+      const g = d3.select(this);
+      const isActive = d.stepIndex === step;
+      const isPast = d.stepIndex < step;
+      const isFuture = d.stepIndex > step;
+
+      // File nodes always stay visible once created
+      if (d.type === 'file') {
+        g.attr('opacity', d.stepIndex <= step ? 0.9 : 0);
+        return;
+      }
+
+      if (isFuture) {
+        g.attr('opacity', 0);
+      } else if (isActive) {
+        g.attr('opacity', 1);
+        g.select('.node-shape').attr('filter', 'url(#glow)');
+      } else if (isPast) {
+        g.attr('opacity', 0.35);
+        g.select('.node-shape').attr('filter', null);
+      }
+    });
+
+    if (this.edgeElements) {
+      this.edgeElements.each(function(d) {
+        const el = d3.select(this);
+        const visible = d.stepIndex <= step;
+        el.attr('display', visible ? null : 'none');
+        el.attr('opacity', d.stepIndex === step ? 0.8 : 0.25);
+      });
+    }
+  }
+
+  tick() {
+    if (this.edgeElements) {
+      this.edgeElements
+        .attr('x1', d => d.source.x)
+        .attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x)
+        .attr('y2', d => d.target.y);
+    }
+    if (this.nodeElements) {
+      this.nodeElements.attr('transform', d => `translate(${d.x},${d.y})`);
+    }
+  }
+
+  fitView() {
+    if (!this.nodeElements || this.nodeElements.size() === 0) return;
+    const bounds = this.g.node().getBBox();
+    if (bounds.width === 0 || bounds.height === 0) return;
+    const pad = 60;
+    const scale = Math.min(
+      this.width / (bounds.width + pad * 2),
+      this.height / (bounds.height + pad * 2),
+      1.5
+    );
+    const tx = this.width / 2 - (bounds.x + bounds.width / 2) * scale;
+    const ty = this.height / 2 - (bounds.y + bounds.height / 2) * scale;
+    this.svg.transition().duration(500)
+      .call(this.zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+  }
+
+  clear() {
+    this.edgeGroup.selectAll('*').remove();
+    this.nodeGroup.selectAll('*').remove();
+    this.edgeElements = null;
+    this.nodeElements = null;
+    if (this.simulation) {
+      this.simulation.stop();
+      this.simulation = null;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+// MessageLog
+// ─────────────────────────────────────────────
+class MessageLog {
+  constructor(container) {
+    this.container = container;
+    this.entries = [];
+  }
+
+  addStep(step) {
+    const el = this.createEntry(step);
+    if (!el) return;
+    this.entries.push({ step, el });
+    this.container.appendChild(el);
+    this.updateHighlights(step.index);
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  createEntry(step) {
+    const div = document.createElement('div');
+    div.className = `msg-entry`;
+    div.dataset.stepIndex = step.index;
+
+    switch (step.type) {
+      case 'user_message':
+        div.innerHTML = `
+          <div class="msg-header"><span class="msg-role user">User</span>
+            ${step.timestamp ? `<span class="msg-time">${this.fmtTime(step.timestamp)}</span>` : ''}</div>
+          <div class="msg-body">${esc(trunc(step.text, 200))}</div>`;
+        break;
+      case 'tool_use':
+        div.innerHTML = `
+          <div class="msg-header">
+            <span class="tool-badge tool-${step.toolName.toLowerCase()}">${step.toolName}</span>
+            ${step.timestamp ? `<span class="msg-time">${this.fmtTime(step.timestamp)}</span>` : ''}</div>
+          <div class="msg-body"><code>${esc(this.fmtToolInput(step))}</code></div>`;
+        break;
+      case 'tool_result':
+        div.innerHTML = `
+          <div class="msg-header"><span class="msg-role result">Result</span></div>
+          <div class="msg-body result-body">${esc(trunc(step.resultPreview, 150))}</div>`;
+        break;
+      case 'assistant_text':
+        div.innerHTML = `
+          <div class="msg-header"><span class="msg-role assistant">Claude</span>
+            ${step.timestamp ? `<span class="msg-time">${this.fmtTime(step.timestamp)}</span>` : ''}</div>
+          <div class="msg-body">${esc(trunc(step.text, 200))}</div>`;
+        break;
+      case 'thinking':
+        div.innerHTML = `
+          <div class="msg-header"><span class="msg-role thinking">Thinking</span></div>
+          <div class="msg-body thinking-body">${esc(trunc(step.thinkingPreview, 100))}</div>`;
+        break;
+      default:
+        return null;
+    }
+
+    // Click to seek
+    div.addEventListener('click', () => {
+      if (window.appController) window.appController.seekTo(step.index);
+    });
+
+    return div;
+  }
+
+  updateHighlights(currentStep) {
+    for (const { step, el } of this.entries) {
+      el.classList.toggle('active', step.index === currentStep);
+      el.classList.toggle('dimmed', step.index < currentStep);
+    }
+  }
+
+  scrollToStep(stepIndex) {
+    const entry = this.entries.find(e => e.step.index === stepIndex);
+    if (entry) {
+      entry.el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    this.updateHighlights(stepIndex);
+  }
+
+  clear() {
+    this.container.innerHTML = '';
+    this.entries = [];
+  }
+
+  fmtTime(ts) {
+    if (!ts) return '';
+    const h = ts.getHours().toString().padStart(2, '0');
+    const m = ts.getMinutes().toString().padStart(2, '0');
+    const s = ts.getSeconds().toString().padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  }
+
+  fmtToolInput(step) {
+    const inp = step.input;
+    switch (step.toolName) {
+      case 'Read': return basename(inp.file_path);
+      case 'Write': return `${basename(inp.file_path)} (${(inp.content || '').length} chars)`;
+      case 'Edit': return basename(inp.file_path);
+      case 'Bash': return trunc(inp.command || '', 80);
+      case 'Grep': return `/${(inp.pattern || '').slice(0, 30)}/ in ${basename(inp.path || '.')}`;
+      case 'Glob': return `${(inp.pattern || '').slice(0, 30)} in ${basename(inp.path || '.')}`;
+      case 'WebFetch': return trunc(inp.url || '', 60);
+      case 'WebSearch': return trunc(inp.query || '', 60);
+      case 'Task': return trunc(inp.description || inp.prompt || 'sub-agent', 60);
+      default: return step.toolName;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+// AnimationController
+// ─────────────────────────────────────────────
+class AnimationController {
+  constructor(session, graphModel, renderer, messageLog) {
+    this.session = session;
+    this.model = graphModel;
+    this.renderer = renderer;
+    this.messageLog = messageLog;
+    this.currentStep = -1;
+    this.playing = false;
+    this.timerId = null;
+    this.speed = 600;
+    this.accTokens = { input: 0, output: 0 };
+    this.accFiles = new Set();
+    this.accTools = {};
+
+    window.appController = this;
+  }
+
+  play() {
+    if (this.currentStep >= this.session.steps.length - 1) {
+      // If at end, restart
+      this.seekTo(-1);
+    }
+    this.playing = true;
+    this.updatePlayButton();
+    this.scheduleNext();
+  }
+
+  scheduleNext() {
+    this.timerId = setTimeout(() => {
+      if (!this.playing) return;
+      if (this.currentStep >= this.session.steps.length - 1) {
+        this.pause();
+        return;
+      }
+      this.stepForward();
+      if (this.playing) this.scheduleNext();
+    }, this.speed);
+  }
+
+  pause() {
+    this.playing = false;
+    clearTimeout(this.timerId);
+    this.updatePlayButton();
+  }
+
+  toggle() {
+    this.playing ? this.pause() : this.play();
+  }
+
+  stepForward() {
+    if (this.currentStep >= this.session.steps.length - 1) return;
+    this.currentStep++;
+    this.applyStep(this.currentStep);
+  }
+
+  stepBack() {
+    if (this.currentStep < 0) return;
+    this.currentStep--;
+    this.rebuildToStep(this.currentStep);
+  }
+
+  jumpToStart() {
+    this.pause();
+    this.seekTo(-1);
+  }
+
+  jumpToEnd() {
+    this.pause();
+    this.seekTo(this.session.steps.length - 1);
+  }
+
+  seekTo(stepIndex) {
+    const wasPlaying = this.playing;
+    if (wasPlaying) this.pause();
+    this.currentStep = stepIndex;
+    this.rebuildToStep(stepIndex);
+    // Don't auto-resume on seek
+  }
+
+  setSpeed(ms) {
+    this.speed = ms;
+  }
+
+  applyStep(idx) {
+    const step = this.session.steps[idx];
+    if (!step) return;
+
+    this.model.addStepNodes(step);
+    this.updateAccumulators(step);
+
+    const visNodes = this.model.getVisibleNodes(idx);
+    const visEdges = this.model.getVisibleEdges(idx);
+    this.renderer.render(visNodes, visEdges, idx);
+    this.messageLog.addStep(step);
+    this.updateControls();
+  }
+
+  rebuildToStep(idx) {
+    this.model.reset();
+    this.renderer.clear();
+    this.messageLog.clear();
+    this.accTokens = { input: 0, output: 0 };
+    this.accFiles = new Set();
+    this.accTools = {};
+
+    for (let i = 0; i <= idx; i++) {
+      const step = this.session.steps[i];
+      this.model.addStepNodes(step);
+      this.messageLog.addStep(step);
+      this.updateAccumulators(step);
+    }
+
+    if (idx >= 0) {
+      const visNodes = this.model.getVisibleNodes(idx);
+      const visEdges = this.model.getVisibleEdges(idx);
+      this.renderer.render(visNodes, visEdges, idx);
+    }
+
+    this.messageLog.scrollToStep(idx);
+    this.updateControls();
+  }
+
+  updateAccumulators(step) {
+    if (step.tokens) {
+      this.accTokens.input += step.tokens.input || 0;
+      this.accTokens.output += step.tokens.output || 0;
+    }
+    if (step.type === 'tool_use') {
+      this.accTools[step.toolName] = (this.accTools[step.toolName] || 0) + 1;
+      for (const fp of step.filePaths) this.accFiles.add(fp);
+    }
+  }
+
+  updateControls() {
+    const total = this.session.steps.length;
+    const cur = this.currentStep + 1;
+    document.getElementById('step-counter').textContent = `${cur} / ${total}`;
+
+    const slider = document.getElementById('progress-slider');
+    slider.max = total - 1;
+    slider.value = this.currentStep;
+
+    document.getElementById('btn-prev').disabled = this.currentStep < 0;
+    document.getElementById('btn-start').disabled = this.currentStep < 0;
+    document.getElementById('btn-next').disabled = this.currentStep >= total - 1;
+    document.getElementById('btn-end').disabled = this.currentStep >= total - 1;
+
+    // Stats
+    const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
+    document.getElementById('stat-tokens').textContent =
+      `${fmtK(this.accTokens.input)} in / ${fmtK(this.accTokens.output)} out`;
+    document.getElementById('stat-files').textContent = this.accFiles.size;
+
+    const toolParts = Object.entries(this.accTools).map(([k, v]) => `${k}(${v})`);
+    document.getElementById('stat-tools').textContent = toolParts.join(' ') || '0';
+
+    // Duration
+    if (this.currentStep >= 0) {
+      const first = this.session.steps[0]?.timestamp;
+      const current = this.session.steps[this.currentStep]?.timestamp;
+      if (first && current) {
+        const diffMs = current - first;
+        const mins = Math.floor(diffMs / 60000);
+        const secs = Math.floor((diffMs % 60000) / 1000);
+        document.getElementById('stat-duration').textContent = `${mins}m ${secs}s`;
+      }
+    }
+  }
+
+  updatePlayButton() {
+    const btn = document.getElementById('btn-play');
+    btn.textContent = this.playing ? '\u23F8' : '\u25B6';
+    btn.classList.toggle('playing', this.playing);
+  }
+}
+
+// ─────────────────────────────────────────────
+// Tooltip
+// ─────────────────────────────────────────────
+const tooltip = document.getElementById('tooltip');
+
+function showTooltip(event, d) {
+  let html = '';
+  if (d.type === 'file') {
+    html = `<div class="tt-title">${esc(d.label)}</div>
+      <div class="tt-detail">${esc(d.fullPath)}</div>
+      <div class="tt-detail">Read: ${d.readCount} | Write: ${d.writeCount} | Edit: ${d.editCount}</div>`;
+  } else if (d.type.startsWith('tool:')) {
+    html = `<div class="tt-title">${esc(d.label)}</div>
+      <div class="tt-detail">${esc(d.sublabel || '')}</div>`;
+  }
+  tooltip.innerHTML = html;
+  tooltip.style.display = 'block';
+  moveTooltip(event);
+}
+
+function moveTooltip(event) {
+  tooltip.style.left = (event.clientX + 12) + 'px';
+  tooltip.style.top = (event.clientY - 10) + 'px';
+}
+
+function hideTooltip() {
+  tooltip.style.display = 'none';
+}
+
+// ─────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────
+function esc(s) {
+  const div = document.createElement('div');
+  div.textContent = s || '';
+  return div.innerHTML;
+}
+
+function trunc(s, max) {
+  if (!s) return '';
+  return s.length > max ? s.slice(0, max - 1) + '\u2026' : s;
+}
+
+// ─────────────────────────────────────────────
+// Legend
+// ─────────────────────────────────────────────
+function buildLegend() {
+  const items = [
+    { label: 'Read', color: '#27ae60', shape: 'dot' },
+    { label: 'Write', color: '#e67e22', shape: 'dot' },
+    { label: 'Edit', color: '#f1c40f', shape: 'dot' },
+    { label: 'Bash', color: '#e74c3c', shape: 'dot' },
+    { label: 'Search', color: '#9b59b6', shape: 'dot' },
+    { label: 'Task', color: '#e84393', shape: 'dot' },
+    { label: 'Web', color: '#00b894', shape: 'dot' },
+    { label: 'File', color: '#74b9ff', shape: 'rect' },
+  ];
+
+  const legend = document.getElementById('legend');
+  legend.innerHTML = items.map(i => {
+    const shape = i.shape === 'rect'
+      ? `<span class="legend-rect" style="background:${i.color};opacity:0.4;border:1px solid ${i.color}"></span>`
+      : `<span class="legend-dot" style="background:${i.color}"></span>`;
+    return `<span class="legend-item">${shape} ${i.label}</span>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────
+function initializeApp(session) {
+  document.getElementById('session-info').textContent =
+    `${session.model || 'unknown'} \u00B7 ${session.version || ''} \u00B7 ${session.steps.length} steps`;
+
+  const graphModel = new GraphModel();
+  const renderer = new GraphRenderer(document.getElementById('graph'));
+  const messageLog = new MessageLog(document.getElementById('messages-container'));
+  const controller = new AnimationController(session, graphModel, renderer, messageLog);
+
+  buildLegend();
+
+  // Wire controls
+  document.getElementById('btn-play').addEventListener('click', () => controller.toggle());
+  document.getElementById('btn-next').addEventListener('click', () => { controller.pause(); controller.stepForward(); });
+  document.getElementById('btn-prev').addEventListener('click', () => { controller.pause(); controller.stepBack(); });
+  document.getElementById('btn-start').addEventListener('click', () => controller.jumpToStart());
+  document.getElementById('btn-end').addEventListener('click', () => controller.jumpToEnd());
+
+  document.getElementById('speed-slider').addEventListener('input', (e) => {
+    const val = parseInt(e.target.value);
+    controller.setSpeed(val);
+    document.getElementById('speed-label').textContent = val + 'ms';
+  });
+
+  document.getElementById('progress-slider').addEventListener('input', (e) => {
+    controller.seekTo(parseInt(e.target.value));
+  });
+
+  document.getElementById('btn-reset').addEventListener('click', () => {
+    controller.pause();
+    renderer.clear();
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('landing').classList.remove('hidden');
+    window.appController = null;
+  });
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    switch (e.code) {
+      case 'Space': e.preventDefault(); controller.toggle(); break;
+      case 'ArrowRight': e.preventDefault(); controller.pause(); controller.stepForward(); break;
+      case 'ArrowLeft': e.preventDefault(); controller.pause(); controller.stepBack(); break;
+      case 'Home': e.preventDefault(); controller.jumpToStart(); break;
+      case 'End': e.preventDefault(); controller.jumpToEnd(); break;
+      case 'KeyF': e.preventDefault(); renderer.fitView(); break;
+    }
+  });
+
+  // Update controls initial state
+  controller.updateControls();
+
+  // Auto-play after short delay
+  setTimeout(() => controller.play(), 400);
+}
+
+// ─────────────────────────────────────────────
+// File Loading
+// ─────────────────────────────────────────────
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  dropZone.classList.add('drag-over');
+});
+
+dropZone.addEventListener('dragleave', () => {
+  dropZone.classList.remove('drag-over');
+});
+
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) loadFile(file);
+});
+
+dropZone.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) loadFile(file);
+});
+
+async function loadFile(file) {
+  // Size check
+  if (file.size > 100 * 1024 * 1024) {
+    alert('File too large (>100MB). Please use a smaller session file.');
+    return;
+  }
+  if (file.size > 50 * 1024 * 1024) {
+    if (!confirm('This file is large (>50MB). Loading may be slow. Continue?')) return;
+  }
+
+  try {
+    const text = await file.text();
+    const parser = new SessionParser();
+    const session = parser.parse(text);
+
+    if (session.steps.length === 0) {
+      alert('No visualizable steps found in this file. Make sure it\'s a Claude Code session .jsonl file.');
+      return;
+    }
+
+    document.getElementById('landing').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    initializeApp(session);
+  } catch (err) {
+    alert('Error loading file: ' + err.message);
+  }
+}
+</script>
+</body>
+</html>
