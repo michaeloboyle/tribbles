@@ -79,11 +79,31 @@ def scan_sessions():
 
 
 def extract_metadata(path):
-    """Read a session file and extract key metadata."""
+    """Read a session file and extract key metadata.
+
+    For large files (>5MB), only reads the first 200 and last 50 lines
+    for speed. Full accuracy isn't needed for the browser listing.
+    """
     meta = {}
     try:
-        with open(path, "r") as f:
-            lines = f.readlines()
+        size = path.stat().st_size
+        if size > 5 * 1024 * 1024:
+            # Large file: read head + tail only
+            lines = []
+            with open(path, "r") as f:
+                for i, line in enumerate(f):
+                    if i < 200:
+                        lines.append(line)
+                    else:
+                        break
+            # Read last 50 lines
+            with open(path, "rb") as f:
+                f.seek(max(0, size - 100_000))
+                tail = f.read().decode("utf-8", errors="replace")
+                lines.extend(tail.strip().split("\n")[-50:])
+        else:
+            with open(path, "r") as f:
+                lines = f.readlines()
     except Exception:
         return None
 
@@ -317,6 +337,7 @@ def main():
         label = "LIVE" if top.get("active") else top.get("modifiedAgo", "")
         print(f"Latest: [{label}] {top['firstMessage'][:60]}")
 
+    http.server.HTTPServer.allow_reuse_address = True
     server = http.server.HTTPServer(("127.0.0.1", PORT), Handler)
     print(f"\nServing at http://localhost:{PORT}")
     print("Press Ctrl+C to stop\n")
