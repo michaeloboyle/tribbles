@@ -949,18 +949,22 @@ class SessionParser {
   parseBashCommand(cmdStr) {
     if (!cmdStr) return [];
 
-    // Split on chain operators, preserving the operator
-    // Handle quoted strings by not splitting inside them
+    // Split on chain operators, respecting quotes AND $() subshells
     const tokens = [];
     let current = '';
     let inSingle = false, inDouble = false;
+    let parenDepth = 0;
     for (let i = 0; i < cmdStr.length; i++) {
       const c = cmdStr[i];
-      if (c === "'" && !inDouble) { inSingle = !inSingle; current += c; continue; }
-      if (c === '"' && !inSingle) { inDouble = !inDouble; current += c; continue; }
-      if (inSingle || inDouble) { current += c; continue; }
+      if (c === "'" && !inDouble && parenDepth === 0) { inSingle = !inSingle; current += c; continue; }
+      if (c === '"' && !inSingle && parenDepth === 0) { inDouble = !inDouble; current += c; continue; }
+      if (inSingle) { current += c; continue; }
 
-      // Check for operators
+      // Track $() and () subshell depth
+      if (c === '(' ) { parenDepth++; current += c; continue; }
+      if (c === ')' && parenDepth > 0) { parenDepth--; current += c; continue; }
+      if (parenDepth > 0 || inDouble) { current += c; continue; }
+
       if (c === '|' && cmdStr[i+1] === '|') {
         if (current.trim()) tokens.push({ text: current.trim(), op: null });
         tokens.push({ text: null, op: '||' });
@@ -992,19 +996,30 @@ class SessionParser {
       if (tok.op) { prevOp = tok.op; continue; }
 
       const raw = tok.text;
-      // Strip leading env vars, redirections noise
-      const cleaned = raw.replace(/^\s*\w+=\S*\s+/, '').replace(/\s*[<>].*$/, '').trim();
+      // Skip variable assignments (VAR=value, VAR=$(cmd), etc)
+      if (/^\w+=/.test(raw)) continue;
+      // Strip leading inline env vars (VAR=val cmd ...) but keep the command
+      const cleaned = raw.replace(/^(\s*\w+=\S*\s+)+/, '').replace(/\s*[<>].*$/, '').trim();
       if (!cleaned) continue;
 
-      // Split into args respecting quotes
       const parts = this.splitArgs(cleaned);
       let program = parts[0];
       const args = parts.slice(1);
 
-      // Handle common prefixes
+      // Skip shell syntax keywords
+      const SKIP = ['if','then','else','elif','fi','do','done','for','while','case','esac',
+                     'in','true','false','[','[[',']]',']','!','set','{','}','export','local',
+                     'return','break','continue','shift','declare','typeset','readonly','unset'];
+      if (SKIP.includes(program)) continue;
+
+      // Skip fragments: $, =, parens, leading dash, path fragments, short garbage
+      if (/[${}()=\[\]"']/.test(program) || program.length <= 1
+          || program.startsWith('-') || program.includes('/')) continue;
+
       if (['sudo', 'env', 'nohup', 'time', 'timeout'].includes(program) && parts.length > 1) {
         program = parts[1];
         args.shift();
+        if (SKIP.includes(program) || /[${}()=\[\]]/.test(program)) continue;
       }
 
       // Extract targets (files, paths, meaningful args)
