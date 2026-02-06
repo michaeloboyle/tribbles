@@ -418,6 +418,7 @@ body {
 .edge-file-search { stroke: var(--accent-search); opacity: 0.6; }
 .edge-file-bash { stroke: var(--accent-bash); opacity: 0.4; }
 .edge-file-default { stroke: var(--text-dim); opacity: 0.4; }
+.edge-pipe { stroke: #e74c3c; stroke-width: 2; opacity: 0.5; stroke-dasharray: 2 2; }
 
 /* ── Legend ── */
 #legend {
@@ -881,13 +882,19 @@ class SessionParser {
               uuid: entry.uuid, text: block.text, tokens: tokenInfo,
             });
           } else if (block.type === 'tool_use') {
-            const filePaths = this.extractFilePaths(block.name, block.input || {});
-            session.steps.push({
+            const inp = block.input || {};
+            const filePaths = this.extractFilePaths(block.name, inp);
+            const step = {
               index: stepIndex++, type: 'tool_use', timestamp: ts,
               uuid: entry.uuid, toolName: block.name,
-              toolUseId: block.id, input: block.input || {},
+              toolUseId: block.id, input: inp,
               filePaths, tokens: tokenInfo,
-            });
+            };
+            // Parse bash commands into structured sub-commands
+            if (block.name === 'Bash' && inp.command) {
+              step.bashCommands = this.parseBashCommand(inp.command);
+            }
+            session.steps.push(step);
           }
         }
       }
@@ -926,14 +933,180 @@ class SessionParser {
 
   extractPathsFromCommand(cmd) {
     const paths = [];
-    // Quoted absolute paths
     for (const m of cmd.matchAll(/"(\/[^"]{2,})"/g)) paths.push(m[1]);
     for (const m of cmd.matchAll(/'(\/[^']{2,})'/g)) paths.push(m[1]);
-    // Unquoted absolute paths after common commands
     for (const m of cmd.matchAll(/(?:cat|ls|cd|mkdir|rm|cp|mv|head|tail|wc|chmod|touch|python|node|git\s+\S+)\s+(\/\S+)/g)) {
       paths.push(m[1]);
     }
     return paths.filter(p => p.length > 2 && !p.startsWith('/dev/'));
+  }
+
+  /**
+   * Parse a bash command string into structured sub-commands.
+   * Splits on &&, ||, ;, and | to produce individual command objects.
+   * Each has: { program, args, display, targets[], category }
+   */
+  parseBashCommand(cmdStr) {
+    if (!cmdStr) return [];
+
+    // Split on chain operators, preserving the operator
+    // Handle quoted strings by not splitting inside them
+    const tokens = [];
+    let current = '';
+    let inSingle = false, inDouble = false;
+    for (let i = 0; i < cmdStr.length; i++) {
+      const c = cmdStr[i];
+      if (c === "'" && !inDouble) { inSingle = !inSingle; current += c; continue; }
+      if (c === '"' && !inSingle) { inDouble = !inDouble; current += c; continue; }
+      if (inSingle || inDouble) { current += c; continue; }
+
+      // Check for operators
+      if (c === '|' && cmdStr[i+1] === '|') {
+        if (current.trim()) tokens.push({ text: current.trim(), op: null });
+        tokens.push({ text: null, op: '||' });
+        current = ''; i++; continue;
+      }
+      if (c === '&' && cmdStr[i+1] === '&') {
+        if (current.trim()) tokens.push({ text: current.trim(), op: null });
+        tokens.push({ text: null, op: '&&' });
+        current = ''; i++; continue;
+      }
+      if (c === ';') {
+        if (current.trim()) tokens.push({ text: current.trim(), op: null });
+        tokens.push({ text: null, op: ';' });
+        current = ''; continue;
+      }
+      if (c === '|') {
+        if (current.trim()) tokens.push({ text: current.trim(), op: null });
+        tokens.push({ text: null, op: '|' });
+        current = ''; continue;
+      }
+      current += c;
+    }
+    if (current.trim()) tokens.push({ text: current.trim(), op: null });
+
+    const commands = [];
+    let prevOp = null;
+
+    for (const tok of tokens) {
+      if (tok.op) { prevOp = tok.op; continue; }
+
+      const raw = tok.text;
+      // Strip leading env vars, redirections noise
+      const cleaned = raw.replace(/^\s*\w+=\S*\s+/, '').replace(/\s*[<>].*$/, '').trim();
+      if (!cleaned) continue;
+
+      // Split into args respecting quotes
+      const parts = this.splitArgs(cleaned);
+      let program = parts[0];
+      const args = parts.slice(1);
+
+      // Handle common prefixes
+      if (['sudo', 'env', 'nohup', 'time', 'timeout'].includes(program) && parts.length > 1) {
+        program = parts[1];
+        args.shift();
+      }
+
+      // Extract targets (files, paths, meaningful args)
+      const targets = [];
+      for (const arg of args) {
+        const unquoted = arg.replace(/^["']|["']$/g, '');
+        if (unquoted.startsWith('/') && unquoted.length > 2 && !unquoted.startsWith('/dev/')) {
+          targets.push(unquoted);
+        } else if (unquoted.startsWith('./') || unquoted.startsWith('../')) {
+          targets.push(unquoted);
+        } else if (unquoted.includes('/') && !unquoted.startsWith('-') && unquoted.length > 3
+                   && !unquoted.startsWith('http')) {
+          targets.push(unquoted);
+        } else if (unquoted.match(/\.\w{1,6}$/) && !unquoted.startsWith('-')) {
+          targets.push(unquoted);
+        }
+      }
+
+      // Also extract quoted paths from the raw command string
+      for (const m of raw.matchAll(/"(\/[^"]{2,})"/g)) {
+        if (!targets.includes(m[1])) targets.push(m[1]);
+      }
+      for (const m of raw.matchAll(/'(\/[^']{2,})'/g)) {
+        if (!targets.includes(m[1])) targets.push(m[1]);
+      }
+
+      const category = this.categorizeCommand(program);
+
+      // Include subcommand for multi-word tools
+      let display = program;
+      const subCmdTools = ['git', 'npm', 'npx', 'yarn', 'docker', 'kubectl', 'cargo', 'brew', 'pip', 'pip3'];
+      if (subCmdTools.includes(program) && args.length > 0 && !args[0].startsWith('-')) {
+        display = `${program} ${args[0]}`;
+      }
+
+      commands.push({
+        program,
+        display,
+        args: raw,
+        targets,
+        category,
+        pipeOp: prevOp,
+      });
+      prevOp = null;
+    }
+
+    return commands;
+  }
+
+  /** Split a command string into arguments, respecting quotes */
+  splitArgs(str) {
+    const args = [];
+    let current = '';
+    let inSingle = false, inDouble = false;
+    for (const c of str) {
+      if (c === "'" && !inDouble) { inSingle = !inSingle; current += c; continue; }
+      if (c === '"' && !inSingle) { inDouble = !inDouble; current += c; continue; }
+      if ((c === ' ' || c === '\t') && !inSingle && !inDouble) {
+        if (current) { args.push(current); current = ''; }
+        continue;
+      }
+      current += c;
+    }
+    if (current) args.push(current);
+    return args;
+  }
+
+  categorizeCommand(program) {
+    const categories = {
+      git: 'vcs',
+      gh: 'vcs',
+      svn: 'vcs',
+      npm: 'pkg',
+      npx: 'pkg',
+      yarn: 'pkg',
+      pip: 'pkg',
+      pip3: 'pkg',
+      brew: 'pkg',
+      cargo: 'pkg',
+      python: 'exec',
+      python3: 'exec',
+      node: 'exec',
+      ruby: 'exec',
+      java: 'exec',
+      go: 'exec',
+      make: 'build',
+      cmake: 'build',
+      gcc: 'build',
+      rustc: 'build',
+      tsc: 'build',
+      webpack: 'build',
+      ls: 'fs', cd: 'fs', pwd: 'fs', mkdir: 'fs', rm: 'fs',
+      cp: 'fs', mv: 'fs', touch: 'fs', chmod: 'fs', chown: 'fs',
+      cat: 'fs', head: 'fs', tail: 'fs', wc: 'fs', find: 'fs', du: 'fs',
+      grep: 'search', rg: 'search', ag: 'search', awk: 'search', sed: 'search',
+      curl: 'net', wget: 'net', ssh: 'net', scp: 'net',
+      docker: 'infra', kubectl: 'infra',
+      echo: 'io', printf: 'io', tee: 'io',
+      ps: 'sys', kill: 'sys', top: 'sys', lsof: 'sys', pgrep: 'sys',
+      xargs: 'sys', sort: 'sys', uniq: 'sys', tr: 'sys', cut: 'sys',
+    };
+    return categories[program] || 'other';
   }
 }
 
@@ -945,6 +1118,21 @@ const TOOL_COLORS = {
   Bash: '#e74c3c', Grep: '#9b59b6', Glob: '#9b59b6',
   Task: '#e84393', WebFetch: '#00b894', WebSearch: '#00b894',
   NotebookEdit: '#f1c40f', Skill: '#e84393',
+};
+
+// Colors for bash sub-command categories
+const CMD_COLORS = {
+  vcs: '#f39c12',    // git, gh — amber
+  pkg: '#1abc9c',    // npm, pip, brew — teal
+  exec: '#e67e22',   // python, node — orange
+  build: '#d35400',  // make, tsc — burnt orange
+  fs: '#e74c3c',     // ls, cd, mkdir — red
+  search: '#9b59b6', // grep, rg — purple
+  net: '#3498db',    // curl, wget — blue
+  infra: '#2c3e50',  // docker, kubectl — dark
+  io: '#95a5a6',     // echo, printf — gray
+  sys: '#7f8c8d',    // ps, kill — dark gray
+  other: '#c0392b',  // fallback — dark red
 };
 
 const TOOL_EDGE_CLASS = {
@@ -992,61 +1180,100 @@ class GraphModel {
 
   addStepNodes(step) {
     if (step.type === 'tool_use') {
-      const nodeId = `step-${step.index}`;
-      const node = {
-        id: nodeId, type: `tool:${step.toolName}`, label: step.toolName,
-        sublabel: this.toolSublabel(step), color: toolColor(step.toolName),
-        stepIndex: step.index, shape: 'circle', r: 18,
-      };
-      this.nodes.push(node);
-      this.nodeMap.set(nodeId, node);
-
-      // Flow edge from previous tool
-      if (this.lastToolNodeId) {
-        this.edges.push({
-          source: this.lastToolNodeId, target: nodeId,
-          type: 'flow', stepIndex: step.index, edgeClass: 'edge-flow',
-        });
-      }
-      this.lastToolNodeId = nodeId;
-
-      // File edges
-      for (const fp of step.filePaths) {
-        const fid = fileId(fp);
-        if (!this.fileNodes.has(fid)) {
-          const fnode = {
-            id: fid, type: 'file', label: basename(fp), fullPath: fp,
-            sublabel: shortenPath(fp), color: '#74b9ff',
-            stepIndex: step.index, shape: 'rect',
-            readCount: 0, writeCount: 0, editCount: 0,
-          };
-          this.nodes.push(fnode);
-          this.nodeMap.set(fid, fnode);
-          this.fileNodes.set(fid, fnode);
-        }
-        // Update file stats
-        const fnode = this.fileNodes.get(fid);
-        if (step.toolName === 'Read' || step.toolName === 'Grep' || step.toolName === 'Glob') fnode.readCount++;
-        else if (step.toolName === 'Write') fnode.writeCount++;
-        else if (step.toolName === 'Edit') fnode.editCount++;
-
-        const edgeClass = TOOL_EDGE_CLASS[step.toolName] || 'edge-file-default';
-        this.edges.push({
-          source: nodeId, target: fid,
-          type: 'file_ref', stepIndex: step.index, edgeClass,
-        });
+      if (step.toolName === 'Bash' && step.bashCommands && step.bashCommands.length > 0) {
+        // Decompose Bash into individual command nodes
+        this.addBashSubCommands(step);
+      } else {
+        // Standard single-node tool
+        this.addSingleToolNode(step);
       }
     } else if (step.type === 'user_message') {
-      // Reset flow chain on new user message
       this.lastToolNodeId = null;
-    } else if (step.type === 'tool_result') {
-      // Mark matching tool node as completed
-      for (const n of this.nodes) {
-        if (n.type.startsWith('tool:') && this.nodeMap.get(n.id)) {
-          // Find by matching the previous tool_use step
-          // tool_results immediately follow their tool_use
-        }
+    }
+  }
+
+  addSingleToolNode(step) {
+    const nodeId = `step-${step.index}`;
+    const node = {
+      id: nodeId, type: `tool:${step.toolName}`, label: step.toolName,
+      sublabel: this.toolSublabel(step), color: toolColor(step.toolName),
+      stepIndex: step.index, shape: 'circle', r: 18,
+    };
+    this.nodes.push(node);
+    this.nodeMap.set(nodeId, node);
+
+    if (this.lastToolNodeId) {
+      this.edges.push({
+        source: this.lastToolNodeId, target: nodeId,
+        type: 'flow', stepIndex: step.index, edgeClass: 'edge-flow',
+      });
+    }
+    this.lastToolNodeId = nodeId;
+
+    this.addFileEdges(nodeId, step.filePaths, step);
+  }
+
+  addBashSubCommands(step) {
+    const cmds = step.bashCommands;
+    let prevCmdId = this.lastToolNodeId;
+
+    for (let i = 0; i < cmds.length; i++) {
+      const cmd = cmds[i];
+      const cmdId = `step-${step.index}-cmd-${i}`;
+      const color = CMD_COLORS[cmd.category] || CMD_COLORS.other;
+
+      const node = {
+        id: cmdId, type: `cmd:${cmd.category}`, label: cmd.display,
+        sublabel: cmd.targets.length > 0 ? cmd.targets.map(t => basename(t)).join(', ') : '',
+        fullCommand: cmd.args,
+        color, stepIndex: step.index, shape: 'hexagon', r: 16,
+      };
+      this.nodes.push(node);
+      this.nodeMap.set(cmdId, node);
+
+      // Chain from previous (either prior tool or prior sub-command)
+      if (prevCmdId) {
+        const isPipe = cmd.pipeOp === '|';
+        this.edges.push({
+          source: prevCmdId, target: cmdId,
+          type: isPipe ? 'pipe' : 'flow',
+          stepIndex: step.index,
+          edgeClass: isPipe ? 'edge-pipe' : 'edge-flow',
+        });
       }
+      prevCmdId = cmdId;
+
+      // Connect sub-command to its file targets
+      this.addFileEdges(cmdId, cmd.targets, step);
+    }
+
+    this.lastToolNodeId = prevCmdId;
+  }
+
+  addFileEdges(sourceId, paths, step) {
+    for (const fp of paths) {
+      const fid = fileId(fp);
+      if (!this.fileNodes.has(fid)) {
+        const fnode = {
+          id: fid, type: 'file', label: basename(fp), fullPath: fp,
+          sublabel: shortenPath(fp), color: '#74b9ff',
+          stepIndex: step.index, shape: 'rect',
+          readCount: 0, writeCount: 0, editCount: 0,
+        };
+        this.nodes.push(fnode);
+        this.nodeMap.set(fid, fnode);
+        this.fileNodes.set(fid, fnode);
+      }
+      const fnode = this.fileNodes.get(fid);
+      if (step.toolName === 'Read' || step.toolName === 'Grep' || step.toolName === 'Glob') fnode.readCount++;
+      else if (step.toolName === 'Write') fnode.writeCount++;
+      else if (step.toolName === 'Edit') fnode.editCount++;
+
+      const edgeClass = TOOL_EDGE_CLASS[step.toolName] || 'edge-file-default';
+      this.edges.push({
+        source: sourceId, target: fid,
+        type: 'file_ref', stepIndex: step.index, edgeClass,
+      });
     }
   }
 
@@ -1231,6 +1458,30 @@ class GraphRenderer {
         g.append('text').attr('class', 'node-label')
           .attr('dy', 1)
           .text(d.label.length > 14 ? d.label.slice(0, 13) + '\u2026' : d.label);
+      } else if (d.shape === 'hexagon') {
+        // Bash sub-command node (hexagon)
+        const r = d.r || 16;
+        const hex = d3.range(6).map(i => {
+          const a = (Math.PI / 3) * i - Math.PI / 6;
+          return [r * Math.cos(a), r * Math.sin(a)];
+        });
+        g.append('polygon')
+          .attr('class', 'node-shape')
+          .attr('points', hex.map(p => p.join(',')).join(' '))
+          .attr('fill', d.color)
+          .attr('fill-opacity', 0.25)
+          .attr('stroke', d.color)
+          .attr('stroke-width', 1.5);
+        const maxLen = Math.max(6, Math.min(10, d.label.length));
+        g.append('text').attr('class', 'node-label')
+          .attr('dy', 0.5)
+          .attr('font-size', d.label.length > 8 ? '7px' : '8px')
+          .text(d.label.length > maxLen ? d.label.slice(0, maxLen - 1) + '\u2026' : d.label);
+        if (d.sublabel) {
+          g.append('text').attr('class', 'node-sublabel')
+            .attr('dy', r + 11)
+            .text(d.sublabel.length > 20 ? d.sublabel.slice(0, 19) + '\u2026' : d.sublabel);
+        }
       } else {
         // Tool node (circle)
         g.append('circle')
@@ -1245,7 +1496,7 @@ class GraphRenderer {
           .text(d.label.length > 6 ? d.label.slice(0, 5) : d.label);
         if (d.sublabel) {
           g.append('text').attr('class', 'node-sublabel')
-            .attr('dy', d.r + 12)
+            .attr('dy', (d.r || 18) + 12)
             .text(d.sublabel.length > 22 ? d.sublabel.slice(0, 21) + '\u2026' : d.sublabel);
         }
       }
@@ -1649,6 +1900,9 @@ function showTooltip(event, d) {
     html = `<div class="tt-title">${esc(d.label)}</div>
       <div class="tt-detail">${esc(d.fullPath)}</div>
       <div class="tt-detail">Read: ${d.readCount} | Write: ${d.writeCount} | Edit: ${d.editCount}</div>`;
+  } else if (d.type.startsWith('cmd:')) {
+    html = `<div class="tt-title">${esc(d.label)}</div>
+      <div class="tt-detail" style="font-family:monospace">${esc(d.fullCommand || '')}</div>`;
   } else if (d.type.startsWith('tool:')) {
     html = `<div class="tt-title">${esc(d.label)}</div>
       <div class="tt-detail">${esc(d.sublabel || '')}</div>`;
@@ -1689,18 +1943,29 @@ function buildLegend() {
     { label: 'Read', color: '#27ae60', shape: 'dot' },
     { label: 'Write', color: '#e67e22', shape: 'dot' },
     { label: 'Edit', color: '#f1c40f', shape: 'dot' },
-    { label: 'Bash', color: '#e74c3c', shape: 'dot' },
     { label: 'Search', color: '#9b59b6', shape: 'dot' },
     { label: 'Task', color: '#e84393', shape: 'dot' },
     { label: 'Web', color: '#00b894', shape: 'dot' },
     { label: 'File', color: '#74b9ff', shape: 'rect' },
+    { label: 'git', color: '#f39c12', shape: 'hex' },
+    { label: 'fs', color: '#e74c3c', shape: 'hex' },
+    { label: 'pkg', color: '#1abc9c', shape: 'hex' },
+    { label: 'exec', color: '#e67e22', shape: 'hex' },
+    { label: 'net', color: '#3498db', shape: 'hex' },
   ];
 
   const legend = document.getElementById('legend');
   legend.innerHTML = items.map(i => {
-    const shape = i.shape === 'rect'
-      ? `<span class="legend-rect" style="background:${i.color};opacity:0.4;border:1px solid ${i.color}"></span>`
-      : `<span class="legend-dot" style="background:${i.color}"></span>`;
+    let shape;
+    if (i.shape === 'rect') {
+      shape = `<span class="legend-rect" style="background:${i.color};opacity:0.4;border:1px solid ${i.color}"></span>`;
+    } else if (i.shape === 'hex') {
+      shape = `<svg width="10" height="10" viewBox="-6 -6 12 12"><polygon points="${
+        d3.range(6).map(j => { const a = (Math.PI/3)*j - Math.PI/6; return [5*Math.cos(a), 5*Math.sin(a)].join(','); }).join(' ')
+      }" fill="${i.color}" fill-opacity="0.5" stroke="${i.color}" stroke-width="1"/></svg>`;
+    } else {
+      shape = `<span class="legend-dot" style="background:${i.color}"></span>`;
+    }
     return `<span class="legend-item">${shape} ${i.label}</span>`;
   }).join('');
 }
