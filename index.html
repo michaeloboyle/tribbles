@@ -1012,9 +1012,10 @@ class SessionParser {
                      'return','break','continue','shift','declare','typeset','readonly','unset'];
       if (SKIP.includes(program)) continue;
 
-      // Skip fragments: $, =, parens, leading dash, path fragments, short garbage
+      // Skip fragments: $, =, parens, leading dash, path fragments, short garbage, bare numbers
       if (/[${}()=\[\]"']/.test(program) || program.length <= 1
-          || program.startsWith('-') || program.includes('/')) continue;
+          || program.startsWith('-') || program.includes('/')
+          || /^\d+$/.test(program)) continue;
 
       if (['sudo', 'env', 'nohup', 'time', 'timeout'].includes(program) && parts.length > 1) {
         program = parts[1];
@@ -1022,28 +1023,38 @@ class SessionParser {
         if (SKIP.includes(program) || /[${}()=\[\]]/.test(program)) continue;
       }
 
-      // Extract targets (files, paths, meaningful args)
+      // Extract targets — but skip for inline code commands
       const targets = [];
-      for (const arg of args) {
-        const unquoted = arg.replace(/^["']|["']$/g, '');
-        if (unquoted.startsWith('/') && unquoted.length > 2 && !unquoted.startsWith('/dev/')) {
-          targets.push(unquoted);
-        } else if (unquoted.startsWith('./') || unquoted.startsWith('../')) {
-          targets.push(unquoted);
-        } else if (unquoted.includes('/') && !unquoted.startsWith('-') && unquoted.length > 3
-                   && !unquoted.startsWith('http')) {
-          targets.push(unquoted);
-        } else if (unquoted.match(/\.\w{1,6}$/) && !unquoted.startsWith('-')) {
-          targets.push(unquoted);
-        }
-      }
+      const isInlineCode = (program === 'node' && args.includes('-e'))
+        || (program === 'python3' && args.includes('-c'))
+        || (program === 'python' && args.includes('-c'))
+        || (program === 'ruby' && args.includes('-e'))
+        || (program === 'perl' && args.includes('-e'));
 
-      // Also extract quoted paths from the raw command string
-      for (const m of raw.matchAll(/"(\/[^"]{2,})"/g)) {
-        if (!targets.includes(m[1])) targets.push(m[1]);
-      }
-      for (const m of raw.matchAll(/'(\/[^']{2,})'/g)) {
-        if (!targets.includes(m[1])) targets.push(m[1]);
+      if (!isInlineCode) {
+        const REAL_EXTS = /\.(js|ts|jsx|tsx|py|rb|go|rs|java|c|h|cpp|hpp|css|html|htm|json|yaml|yml|toml|xml|md|txt|sh|bash|zsh|sql|csv|log|conf|cfg|ini|env|lock|gitignore|jsonl|svg|png|jpg|jpeg|gif|pdf|wasm|mjs|cjs)$/i;
+        for (const arg of args) {
+          const unquoted = arg.replace(/^["']|["']$/g, '');
+          // Skip flags
+          if (unquoted.startsWith('-')) continue;
+          // Absolute paths
+          if (unquoted.startsWith('/') && unquoted.length > 2 && !unquoted.startsWith('/dev/')) {
+            targets.push(unquoted);
+          // Relative paths
+          } else if (unquoted.startsWith('./') || unquoted.startsWith('../')) {
+            targets.push(unquoted);
+          // Files with real extensions (not JS property access like args.length)
+          } else if (REAL_EXTS.test(unquoted)) {
+            targets.push(unquoted);
+          }
+        }
+        // Quoted absolute paths from raw string
+        for (const m of raw.matchAll(/"(\/[^"]{2,})"/g)) {
+          if (!targets.includes(m[1])) targets.push(m[1]);
+        }
+        for (const m of raw.matchAll(/'(\/[^']{2,})'/g)) {
+          if (!targets.includes(m[1])) targets.push(m[1]);
+        }
       }
 
       const category = this.categorizeCommand(program);
