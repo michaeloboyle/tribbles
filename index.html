@@ -1467,6 +1467,9 @@ class GraphRenderer {
         })
       );
 
+    // File nodes get pointer cursor (Cmd+click to open)
+    nodeEnter.filter(d => d.type === 'file').style('cursor', 'pointer');
+
     // Append shapes
     nodeEnter.each(function(d) {
       const g = d3.select(this);
@@ -1534,8 +1537,14 @@ class GraphRenderer {
       .on('mousemove', (e) => moveTooltip(e))
       .on('mouseleave', () => hideTooltip());
 
-    // Click to scroll message log
+    // Click: Cmd+click file nodes to open in editor, regular click to seek
     nodeEnter.on('click', (e, d) => {
+      if ((e.metaKey || e.ctrlKey) && d.type === 'file' && d.fullPath) {
+        fetch(`/api/open?path=${encodeURIComponent(d.fullPath)}`)
+          .then(r => r.json())
+          .then(r => { if (r.error) console.warn('Open failed:', r.error); });
+        return;
+      }
       if (window.appController) {
         window.appController.seekTo(d.stepIndex);
       }

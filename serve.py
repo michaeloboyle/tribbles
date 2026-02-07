@@ -304,6 +304,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             active = [s for s in Handler.sessions if s.get("active")]
             self.send_json(active[0] if active else None)
 
+        elif parsed.path == "/api/open":
+            # Open a file in the default editor
+            params = parse_qs(parsed.query)
+            filepath = params.get("path", [None])[0]
+            if not filepath:
+                self.send_json({"error": "missing path"})
+            elif not os.path.exists(filepath):
+                self.send_json({"error": "file not found"})
+            else:
+                import subprocess
+                subprocess.Popen(["open", filepath])
+                self.send_json({"ok": True, "path": filepath})
+
         else:
             super().do_GET()
 
