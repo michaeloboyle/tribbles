@@ -335,6 +335,17 @@ body {
   font-size: 10.5px;
 }
 
+.file-link {
+  color: #74b9ff;
+  text-decoration: none;
+  cursor: pointer;
+  border-bottom: 1px dotted #74b9ff44;
+}
+.file-link:hover {
+  color: #a0d4ff;
+  border-bottom-color: #74b9ff;
+}
+
 .result-body {
   color: var(--text-dim);
   font-size: 10px;
@@ -1452,23 +1463,22 @@ class GraphRenderer {
 
     nodeSel.exit().transition().duration(200).attr('opacity', 0).remove();
 
+    let dragMoved = false;
     const nodeEnter = nodeSel.enter().append('g')
       .attr('class', 'node-group')
       .attr('opacity', 0)
       .call(d3.drag()
         .on('start', (e, d) => {
+          dragMoved = false;
           if (!e.active) this.simulation.alphaTarget(0.2).restart();
           d.fx = d.x; d.fy = d.y;
         })
-        .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+        .on('drag', (e, d) => { dragMoved = true; d.fx = e.x; d.fy = e.y; })
         .on('end', (e, d) => {
           if (!e.active) this.simulation.alphaTarget(0);
           d.fx = null; d.fy = null;
         })
       );
-
-    // File nodes get pointer cursor (Cmd+click to open)
-    nodeEnter.filter(d => d.type === 'file').style('cursor', 'pointer');
 
     // Append shapes
     nodeEnter.each(function(d) {
@@ -1537,13 +1547,17 @@ class GraphRenderer {
       .on('mousemove', (e) => moveTooltip(e))
       .on('mouseleave', () => hideTooltip());
 
-    // Click: Cmd+click file nodes to open in editor, regular click to seek
-    nodeEnter.on('click', (e, d) => {
-      if ((e.metaKey || e.ctrlKey) && d.type === 'file' && d.fullPath) {
-        fetch(`/api/open?path=${encodeURIComponent(d.fullPath)}`)
-          .then(r => r.json())
-          .then(r => { if (r.error) console.warn('Open failed:', r.error); });
-        return;
+    // Click: Cmd+click to open file, regular click to seek
+    // (dragMoved distinguishes drag from click since d3.drag swallows click events)
+    nodeEnter.on('pointerup', (e, d) => {
+      if (dragMoved) return;
+      if (e.metaKey || e.ctrlKey) {
+        const path = d.type === 'file' ? d.fullPath : null;
+        if (path) {
+          e.preventDefault();
+          openFile(path);
+          return;
+        }
       }
       if (window.appController) {
         window.appController.seekTo(d.stepIndex);
@@ -1670,7 +1684,7 @@ class MessageLog {
           <div class="msg-header">
             <span class="tool-badge tool-${step.toolName.toLowerCase()}">${step.toolName}</span>
             ${step.timestamp ? `<span class="msg-time">${this.fmtTime(step.timestamp)}</span>` : ''}</div>
-          <div class="msg-body"><code>${esc(this.fmtToolInput(step))}</code></div>`;
+          <div class="msg-body"><code>${this.fmtToolInput(step)}</code></div>`;
         break;
       case 'tool_result':
         div.innerHTML = `
@@ -1692,8 +1706,15 @@ class MessageLog {
         return null;
     }
 
-    // Click to seek
-    div.addEventListener('click', () => {
+    // Cmd+click file links to open, regular click to seek
+    div.addEventListener('click', (e) => {
+      const link = e.target.closest('.file-link');
+      if (link) {
+        e.preventDefault();
+        e.stopPropagation();
+        openFile(link.dataset.path);
+        return;
+      }
       if (window.appController) window.appController.seekTo(step.index);
     });
 
@@ -1728,19 +1749,25 @@ class MessageLog {
     return `${h}:${m}:${s}`;
   }
 
+  fileLink(path) {
+    if (!path) return '';
+    const name = basename(path);
+    return `<a class="file-link" href="#" data-path="${esc(path)}" title="${esc(path)}">${esc(name)}</a>`;
+  }
+
   fmtToolInput(step) {
     const inp = step.input;
     switch (step.toolName) {
-      case 'Read': return basename(inp.file_path);
-      case 'Write': return `${basename(inp.file_path)} (${(inp.content || '').length} chars)`;
-      case 'Edit': return basename(inp.file_path);
-      case 'Bash': return trunc(inp.command || '', 80);
-      case 'Grep': return `/${(inp.pattern || '').slice(0, 30)}/ in ${basename(inp.path || '.')}`;
-      case 'Glob': return `${(inp.pattern || '').slice(0, 30)} in ${basename(inp.path || '.')}`;
-      case 'WebFetch': return trunc(inp.url || '', 60);
-      case 'WebSearch': return trunc(inp.query || '', 60);
-      case 'Task': return trunc(inp.description || inp.prompt || 'sub-agent', 60);
-      default: return step.toolName;
+      case 'Read': return this.fileLink(inp.file_path);
+      case 'Write': return `${this.fileLink(inp.file_path)} (${(inp.content || '').length} chars)`;
+      case 'Edit': return this.fileLink(inp.file_path);
+      case 'Bash': return esc(trunc(inp.command || '', 80));
+      case 'Grep': return `/${esc((inp.pattern || '').slice(0, 30))}/ in ${this.fileLink(inp.path || '.')}`;
+      case 'Glob': return `${esc((inp.pattern || '').slice(0, 30))} in ${this.fileLink(inp.path || '.')}`;
+      case 'WebFetch': return esc(trunc(inp.url || '', 60));
+      case 'WebSearch': return esc(trunc(inp.query || '', 60));
+      case 'Task': return esc(trunc(inp.description || inp.prompt || 'sub-agent', 60));
+      default: return esc(step.toolName);
     }
   }
 }
@@ -1968,6 +1995,13 @@ function esc(s) {
 function trunc(s, max) {
   if (!s) return '';
   return s.length > max ? s.slice(0, max - 1) + '\u2026' : s;
+}
+
+function openFile(path) {
+  fetch(`/api/open?path=${encodeURIComponent(path)}`)
+    .then(r => r.json())
+    .then(r => { if (r.error) console.warn('Open failed:', r.error); })
+    .catch(e => console.warn('Open failed:', e));
 }
 
 // ─────────────────────────────────────────────
