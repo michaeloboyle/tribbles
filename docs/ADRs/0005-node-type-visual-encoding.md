@@ -1,5 +1,7 @@
 # ADR-0005: Node Type Visual Encoding (Shape, Color, Persistence)
 
+**GitHub Issue:** [#5](https://github.com/michaeloboyle/claude-code-activity-viz/issues/5)
+
 ## Status
 Accepted
 

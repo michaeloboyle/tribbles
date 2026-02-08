@@ -1,5 +1,7 @@
 # ADR-0004: Bash Command Decomposition into Sub-Command Nodes
 
+**GitHub Issue:** [#4](https://github.com/michaeloboyle/claude-code-activity-viz/issues/4)
+
 ## Status
 Accepted
 

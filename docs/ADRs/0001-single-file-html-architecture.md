@@ -1,5 +1,7 @@
 # ADR-0001: Single-File HTML Architecture
 
+**GitHub Issue:** [#1](https://github.com/michaeloboyle/claude-code-activity-viz/issues/1)
+
 ## Status
 Accepted
 

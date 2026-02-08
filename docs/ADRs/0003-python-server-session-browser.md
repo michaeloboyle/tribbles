@@ -1,5 +1,7 @@
 # ADR-0003: Python HTTP Server with Session Browser and Live Mode
 
+**GitHub Issue:** [#3](https://github.com/michaeloboyle/claude-code-activity-viz/issues/3)
+
 ## Status
 Accepted
 

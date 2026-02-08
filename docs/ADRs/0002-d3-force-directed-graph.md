@@ -1,5 +1,7 @@
 # ADR-0002: D3.js Force-Directed Graph for Visualization
 
+**GitHub Issue:** [#2](https://github.com/michaeloboyle/claude-code-activity-viz/issues/2)
+
 ## Status
 Accepted
 
