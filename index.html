@@ -162,6 +162,26 @@ body {
   color: #fff;
 }
 
+.control-group.layout label {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.control-group.layout select {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.control-group.layout select:hover {
+  border-color: var(--accent-user);
+}
+
 .control-group.speed label {
   color: var(--text-dim);
   font-size: 11px;
@@ -526,6 +546,15 @@ body {
   width: 100%;
 }
 
+#new-session-bar {
+  width: 100%;
+  max-width: 800px;
+  display: flex;
+  justify-content: center;
+}
+
+#new-session-bar.hidden { display: none; }
+
 #session-browser {
   width: 100%;
   max-width: 800px;
@@ -712,6 +741,125 @@ body {
   height: 6px;
 }
 
+/* ── Prompt Bar ── */
+.control-group.prompt {
+  gap: 6px;
+}
+
+.control-group.prompt.hidden {
+  display: none;
+}
+
+.control-group.prompt.visible {
+  display: flex;
+}
+
+#prompt-input {
+  width: 200px;
+  padding: 3px 8px;
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+}
+
+#prompt-input:focus {
+  border-color: var(--accent-user);
+}
+
+.prompt-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.prompt-btn.send {
+  background: var(--accent-user);
+  border-color: var(--accent-user);
+  color: #fff;
+}
+
+.prompt-btn.send:hover {
+  opacity: 0.85;
+}
+
+.prompt-btn.send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.prompt-btn.stop {
+  background: var(--accent-bash);
+  border-color: var(--accent-bash);
+  color: #fff;
+}
+
+.prompt-btn.stop:hover {
+  opacity: 0.85;
+}
+
+.prompt-btn.stop.hidden {
+  display: none;
+}
+
+#prompt-status {
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* ── Continue Button on Session Cards ── */
+.session-btn.continue-btn {
+  border-color: var(--accent-user);
+  color: var(--accent-user);
+}
+
+.session-btn.continue-btn:hover {
+  background: var(--accent-user);
+  color: #fff;
+}
+
+.session-continue-input {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  grid-column: 1 / -1;
+}
+
+.session-continue-input input {
+  flex: 1;
+  padding: 4px 8px;
+  background: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+}
+
+.session-continue-input input:focus {
+  border-color: var(--accent-user);
+}
+
+.session-continue-input button {
+  padding: 4px 10px;
+  background: var(--accent-user);
+  border: 1px solid var(--accent-user);
+  border-radius: 4px;
+  color: #fff;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
 /* ── Responsive ── */
 @media (max-width: 900px) {
   #main {
@@ -735,6 +883,12 @@ body {
       <label for="file-input">Choose .jsonl file</label>
       <input type="file" id="file-input" accept=".jsonl">
       <div class="hint">or drag &amp; drop a session file</div>
+    </div>
+    <div id="new-session-bar" class="hidden">
+      <div class="session-continue-input" style="max-width:500px;width:100%">
+        <input type="text" id="new-session-input" placeholder="Start a new Claude session...">
+        <button id="btn-new-session">Start</button>
+      </div>
     </div>
     <div id="session-browser" class="hidden">
       <div id="browser-header">
@@ -760,11 +914,26 @@ body {
       <input type="range" id="speed-slider" min="50" max="2000" value="600" step="50">
       <span id="speed-label">600ms</span>
     </div>
+    <div class="control-group layout">
+      <label>Layout</label>
+      <select id="layout-select">
+        <option value="force">Force</option>
+        <option value="circular">Circular</option>
+        <option value="hierarchy">Hierarchy</option>
+        <option value="timeline">Timeline</option>
+      </select>
+    </div>
     <div class="control-group progress">
       <span id="step-counter">0 / 0</span>
       <input type="range" id="progress-slider" min="0" max="0" value="0">
     </div>
     <div id="live-indicator"><span class="live-dot"></span> LIVE</div>
+    <div id="prompt-bar" class="control-group prompt hidden">
+      <input type="text" id="prompt-input" placeholder="Send a prompt to Claude...">
+      <button id="btn-send" class="prompt-btn send">Send</button>
+      <button id="btn-stop-prompt" class="prompt-btn stop hidden">Stop</button>
+      <span id="prompt-status"></span>
+    </div>
     <div class="control-group meta">
       <span id="session-info"></span>
       <button id="btn-reset">Reset</button>
@@ -1355,6 +1524,7 @@ class GraphRenderer {
     this.g = this.svg.append('g');
     this.simulation = null;
     this.currentStep = -1;
+    this.currentLayout = 'force';
 
     // SVG defs
     const defs = this.svg.append('defs');
@@ -1398,46 +1568,53 @@ class GraphRenderer {
   render(nodes, edges, currentStep) {
     this.currentStep = currentStep;
 
-    // Update simulation
-    if (!this.simulation) {
-      this.simulation = d3.forceSimulation()
-        .force('link', d3.forceLink().id(d => d.id).distance(d => d.type === 'flow' ? 60 : 100).strength(0.4))
-        .force('charge', d3.forceManyBody().strength(-250).distanceMax(400))
-        .force('center', d3.forceCenter(this.width / 2, this.height / 2).strength(0.05))
-        .force('collision', d3.forceCollide().radius(d => d.shape === 'rect' ? 50 : 25))
-        .force('x', d3.forceX(this.width / 2).strength(0.03))
-        .force('y', d3.forceY(this.height / 2).strength(0.03))
-        .alphaDecay(0.015)
-        .velocityDecay(0.35)
-        .on('tick', () => this.tick());
-    }
+    if (this.currentLayout === 'force') {
+      // Update simulation
+      if (!this.simulation) {
+        this.simulation = d3.forceSimulation()
+          .force('link', d3.forceLink().id(d => d.id).distance(d => d.type === 'flow' ? 60 : 100).strength(0.4))
+          .force('charge', d3.forceManyBody().strength(-250).distanceMax(400))
+          .force('center', d3.forceCenter(this.width / 2, this.height / 2).strength(0.05))
+          .force('collision', d3.forceCollide().radius(d => d.shape === 'rect' ? 50 : 25))
+          .force('x', d3.forceX(this.width / 2).strength(0.03))
+          .force('y', d3.forceY(this.height / 2).strength(0.03))
+          .alphaDecay(0.015)
+          .velocityDecay(0.35)
+          .on('tick', () => this.tick());
+      }
 
-    // Give new nodes initial positions near center or near their linked nodes
-    for (const n of nodes) {
-      if (n.x === undefined) {
-        // Position near a linked node if possible
-        const linkedEdge = edges.find(e => {
-          const sid = typeof e.source === 'object' ? e.source.id : e.source;
-          const tid = typeof e.target === 'object' ? e.target.id : e.target;
-          return tid === n.id && nodes.find(nn => nn.id === sid && nn.x !== undefined);
-        });
-        if (linkedEdge) {
-          const src = nodes.find(nn => nn.id === (typeof linkedEdge.source === 'object' ? linkedEdge.source.id : linkedEdge.source));
-          if (src && src.x !== undefined) {
-            n.x = src.x + (Math.random() - 0.5) * 80;
-            n.y = src.y + 40 + Math.random() * 40;
+      // Give new nodes initial positions near center or near their linked nodes
+      for (const n of nodes) {
+        if (n.x === undefined) {
+          const linkedEdge = edges.find(e => {
+            const sid = typeof e.source === 'object' ? e.source.id : e.source;
+            const tid = typeof e.target === 'object' ? e.target.id : e.target;
+            return tid === n.id && nodes.find(nn => nn.id === sid && nn.x !== undefined);
+          });
+          if (linkedEdge) {
+            const src = nodes.find(nn => nn.id === (typeof linkedEdge.source === 'object' ? linkedEdge.source.id : linkedEdge.source));
+            if (src && src.x !== undefined) {
+              n.x = src.x + (Math.random() - 0.5) * 80;
+              n.y = src.y + 40 + Math.random() * 40;
+            }
+          }
+          if (n.x === undefined) {
+            n.x = this.width / 2 + (Math.random() - 0.5) * 200;
+            n.y = this.height / 2 + (Math.random() - 0.5) * 200;
           }
         }
-        if (n.x === undefined) {
-          n.x = this.width / 2 + (Math.random() - 0.5) * 200;
-          n.y = this.height / 2 + (Math.random() - 0.5) * 200;
-        }
       }
-    }
 
-    this.simulation.nodes(nodes);
-    this.simulation.force('link').links(edges);
-    this.simulation.alpha(0.3).restart();
+      this.simulation.nodes(nodes);
+      this.simulation.force('link').links(edges);
+      this.simulation.alpha(0.3).restart();
+    } else {
+      // Non-force layouts: stop simulation, compute deterministic positions
+      if (this.simulation) {
+        this.simulation.stop();
+      }
+      this.computeLayoutPositions(nodes, edges, this.currentLayout);
+    }
 
     // ── Edges ──
     const edgeSel = this.edgeGroup.selectAll('.edge-line')
@@ -1571,6 +1748,11 @@ class GraphRenderer {
 
     // Update opacity for active step
     this.updateHighlights(currentStep);
+
+    // For non-force layouts, apply positions immediately
+    if (this.currentLayout !== 'force') {
+      this.applyPositions();
+    }
   }
 
   updateHighlights(step) {
@@ -1609,6 +1791,7 @@ class GraphRenderer {
   }
 
   tick() {
+    if (this.currentLayout !== 'force') return;
     if (this.edgeElements) {
       this.edgeElements
         .attr('x1', d => d.source.x)
@@ -1619,6 +1802,211 @@ class GraphRenderer {
     if (this.nodeElements) {
       this.nodeElements.attr('transform', d => `translate(${d.x},${d.y})`);
     }
+  }
+
+  applyPositions() {
+    if (this.nodeElements) {
+      this.nodeElements.attr('transform', d => `translate(${d.x},${d.y})`);
+    }
+    if (this.edgeElements) {
+      this.edgeElements
+        .attr('x1', d => d.source.x)
+        .attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x)
+        .attr('y2', d => d.target.y);
+    }
+  }
+
+  setLayout(name) {
+    this.currentLayout = name;
+
+    if (this.simulation) {
+      this.simulation.stop();
+    }
+
+    // Gather current nodes from the data bound to the DOM
+    const nodes = [];
+    if (this.nodeElements) {
+      this.nodeElements.each(function(d) { nodes.push(d); });
+    }
+    const edges = [];
+    if (this.edgeElements) {
+      this.edgeElements.each(function(d) { edges.push(d); });
+    }
+
+    if (nodes.length === 0) return;
+
+    if (name === 'force') {
+      // Re-create simulation and let it run
+      this.simulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(edges).id(d => d.id).distance(d => d.type === 'flow' ? 60 : 100).strength(0.4))
+        .force('charge', d3.forceManyBody().strength(-250).distanceMax(400))
+        .force('center', d3.forceCenter(this.width / 2, this.height / 2).strength(0.05))
+        .force('collision', d3.forceCollide().radius(d => d.shape === 'rect' ? 50 : 25))
+        .force('x', d3.forceX(this.width / 2).strength(0.03))
+        .force('y', d3.forceY(this.height / 2).strength(0.03))
+        .alphaDecay(0.015)
+        .velocityDecay(0.35)
+        .on('tick', () => this.tick());
+      this.simulation.alpha(0.5).restart();
+    } else {
+      this.computeLayoutPositions(nodes, edges, name);
+      // Animate to new positions
+      this.nodeElements.transition().duration(500).ease(d3.easeCubicInOut)
+        .attr('transform', d => `translate(${d.x},${d.y})`);
+      this.edgeElements.transition().duration(500).ease(d3.easeCubicInOut)
+        .attr('x1', d => d.source.x)
+        .attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x)
+        .attr('y2', d => d.target.y);
+    }
+  }
+
+  computeLayoutPositions(nodes, edges, layout) {
+    switch (layout) {
+      case 'circular': this.layoutCircular(nodes); break;
+      case 'hierarchy': this.layoutHierarchy(nodes, edges); break;
+      case 'timeline': this.layoutTimeline(nodes); break;
+    }
+  }
+
+  layoutCircular(nodes) {
+    const cx = this.width / 2;
+    const cy = this.height / 2;
+    const fileNodes = nodes.filter(n => n.type === 'file');
+    const toolNodes = nodes.filter(n => n.type !== 'file');
+
+    // Inner ring: tool/command nodes
+    const innerR = Math.min(this.width, this.height) * 0.25;
+    toolNodes.forEach((n, i) => {
+      const angle = (2 * Math.PI * i) / (toolNodes.length || 1) - Math.PI / 2;
+      n.x = cx + innerR * Math.cos(angle);
+      n.y = cy + innerR * Math.sin(angle);
+    });
+
+    // Outer ring: file nodes
+    const outerR = Math.min(this.width, this.height) * 0.4;
+    fileNodes.forEach((n, i) => {
+      const angle = (2 * Math.PI * i) / (fileNodes.length || 1) - Math.PI / 2;
+      n.x = cx + outerR * Math.cos(angle);
+      n.y = cy + outerR * Math.sin(angle);
+    });
+  }
+
+  layoutHierarchy(nodes, edges) {
+    // Build adjacency from flow edges to form a tree
+    const flowEdges = edges.filter(e => e.type === 'flow' || e.type === 'pipe');
+    const childMap = new Map(); // parent -> [children]
+    const hasParent = new Set();
+
+    for (const e of flowEdges) {
+      const sid = typeof e.source === 'object' ? e.source.id : e.source;
+      const tid = typeof e.target === 'object' ? e.target.id : e.target;
+      if (!childMap.has(sid)) childMap.set(sid, []);
+      childMap.get(sid).push(tid);
+      hasParent.add(tid);
+    }
+
+    // Also attach file nodes to their first referencing tool
+    const fileEdges = edges.filter(e => e.type === 'file_ref');
+    const fileAttached = new Set();
+    for (const e of fileEdges) {
+      const sid = typeof e.source === 'object' ? e.source.id : e.source;
+      const tid = typeof e.target === 'object' ? e.target.id : e.target;
+      if (!fileAttached.has(tid)) {
+        if (!childMap.has(sid)) childMap.set(sid, []);
+        childMap.get(sid).push(tid);
+        hasParent.add(tid);
+        fileAttached.add(tid);
+      }
+    }
+
+    // Find roots (tool nodes without parents)
+    const toolNodes = nodes.filter(n => n.type !== 'file' && !hasParent.has(n.id));
+    const nodeById = new Map(nodes.map(n => [n.id, n]));
+
+    // Build d3.hierarchy data structure
+    const rootData = { id: '__root__', children: [] };
+
+    function buildTree(nodeId, visited) {
+      if (visited.has(nodeId)) return null;
+      visited.add(nodeId);
+      const children = (childMap.get(nodeId) || [])
+        .map(cid => buildTree(cid, visited))
+        .filter(Boolean);
+      return { id: nodeId, children: children.length > 0 ? children : undefined };
+    }
+
+    const visited = new Set();
+    for (const root of toolNodes) {
+      const subtree = buildTree(root.id, visited);
+      if (subtree) rootData.children.push(subtree);
+    }
+
+    // Add any orphan nodes not in the tree
+    for (const n of nodes) {
+      if (!visited.has(n.id)) {
+        rootData.children.push({ id: n.id });
+      }
+    }
+
+    if (rootData.children.length === 0) return;
+
+    const hierarchy = d3.hierarchy(rootData);
+    const treeLayout = d3.tree().size([this.height * 0.85, this.width * 0.85]);
+    treeLayout(hierarchy);
+
+    // Apply positions (swap x/y for left-to-right orientation)
+    hierarchy.descendants().forEach(d => {
+      if (d.data.id === '__root__') return;
+      const node = nodeById.get(d.data.id);
+      if (node) {
+        node.x = d.y + this.width * 0.075; // tree y -> screen x (left-to-right)
+        node.y = d.x + this.height * 0.075; // tree x -> screen y
+      }
+    });
+  }
+
+  layoutTimeline(nodes) {
+    const pad = 60;
+    const toolNodes = nodes.filter(n => n.type !== 'file');
+    const fileNodes = nodes.filter(n => n.type === 'file');
+
+    // X axis: step index
+    const stepIndices = [...new Set(toolNodes.map(n => n.stepIndex))].sort((a, b) => a - b);
+    const xScale = d3.scaleLinear()
+      .domain([stepIndices[0] || 0, stepIndices[stepIndices.length - 1] || 1])
+      .range([pad, this.width - pad]);
+
+    // Y axis: swim lanes by type
+    const typeOrder = {};
+    let laneIdx = 0;
+    // Collect unique types preserving order of appearance
+    for (const n of toolNodes) {
+      if (!(n.type in typeOrder)) {
+        typeOrder[n.type] = laneIdx++;
+      }
+    }
+    const numLanes = Math.max(laneIdx, 1);
+    const laneHeight = (this.height - pad * 2 - 80) / (numLanes + 1); // +1 for file lane
+
+    // Position tool nodes
+    // Track per-step-per-lane offsets for stacking
+    const stepLaneCount = {};
+    for (const n of toolNodes) {
+      const lane = typeOrder[n.type];
+      const key = `${n.stepIndex}-${lane}`;
+      stepLaneCount[key] = (stepLaneCount[key] || 0);
+      n.x = xScale(n.stepIndex) + stepLaneCount[key] * 8;
+      n.y = pad + (lane + 0.5) * laneHeight;
+      stepLaneCount[key]++;
+    }
+
+    // File nodes: bottom lane, spread by first-seen step
+    fileNodes.forEach((n, i) => {
+      n.x = xScale(n.stepIndex);
+      n.y = pad + (numLanes + 0.5) * laneHeight;
+    });
   }
 
   fitView() {
@@ -2055,6 +2443,12 @@ function initializeApp(session) {
   wireControls(controller, renderer);
   controller.updateControls();
 
+  // Show prompt bar if server is available
+  if (serverAvailable) {
+    if (!promptManager) promptManager = new PromptManager();
+    promptManager.show();
+  }
+
   // Auto-play after short delay
   setTimeout(() => controller.play(), 400);
 }
@@ -2138,6 +2532,8 @@ async function checkServer() {
       serverAvailable = true;
       const sessions = await resp.json();
       renderSessionBrowser(sessions);
+      // Show new session bar
+      document.getElementById('new-session-bar').classList.remove('hidden');
       return sessions;
     }
   } catch {}
@@ -2183,6 +2579,7 @@ function renderSessionBrowser(sessions) {
         </div>
         <div class="session-actions">
           ${isActive ? `<button class="session-btn live-btn" data-action="live" data-id="${s.id}">Watch Live</button>` : ''}
+          <button class="session-btn continue-btn" data-action="continue" data-id="${s.id}">Continue</button>
           <button class="session-btn" data-action="replay" data-id="${s.id}">Replay</button>
         </div>
       </div>`;
@@ -2196,6 +2593,7 @@ function renderSessionBrowser(sessions) {
       const action = btn.dataset.action;
       if (action === 'live') startLive(id);
       else if (action === 'replay') startReplay(id);
+      else if (action === 'continue') showContinueInput(btn, id);
     });
   });
 
@@ -2208,6 +2606,47 @@ function renderSessionBrowser(sessions) {
       else startReplay(id);
     });
   });
+}
+
+function showContinueInput(btn, sessionId) {
+  // Don't duplicate
+  const card = btn.closest('.session-card');
+  if (card.querySelector('.session-continue-input')) return;
+
+  const row = document.createElement('div');
+  row.className = 'session-continue-input';
+  row.innerHTML = `
+    <input type="text" placeholder="Enter a prompt..." autofocus>
+    <button>Send</button>
+  `;
+  card.appendChild(row);
+
+  const input = row.querySelector('input');
+  const sendBtn = row.querySelector('button');
+
+  // Prevent card click from navigating
+  row.addEventListener('click', e => e.stopPropagation());
+  input.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') doSend();
+    if (e.key === 'Escape') row.remove();
+  });
+
+  function doSend() {
+    const prompt = input.value.trim();
+    if (!prompt) return;
+
+    if (!promptManager) promptManager = new PromptManager();
+
+    // Show the app, enter prompt flow
+    showApp();
+    promptManager.show();
+    promptManager.input.value = prompt;
+    promptManager.send(sessionId);
+  }
+
+  sendBtn.addEventListener('click', doSend);
+  input.focus();
 }
 
 async function startReplay(sessionId) {
@@ -2324,6 +2763,145 @@ function stopLive() {
 }
 
 // ─────────────────────────────────────────────
+// PromptManager
+// ─────────────────────────────────────────────
+class PromptManager {
+  constructor() {
+    this.pollTimer = null;
+    this.warningShown = false;
+    this.bar = document.getElementById('prompt-bar');
+    this.input = document.getElementById('prompt-input');
+    this.sendBtn = document.getElementById('btn-send');
+    this.stopBtn = document.getElementById('btn-stop-prompt');
+    this.statusEl = document.getElementById('prompt-status');
+
+    this.sendBtn.addEventListener('click', () => this.send());
+    this.stopBtn.addEventListener('click', () => this.stop());
+
+    // Prevent keyboard shortcuts when typing in prompt
+    this.input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.send();
+      }
+    });
+  }
+
+  show() {
+    this.bar.classList.remove('hidden');
+    this.bar.classList.add('visible');
+  }
+
+  hide() {
+    this.bar.classList.add('hidden');
+    this.bar.classList.remove('visible');
+    this.stopPolling();
+  }
+
+  async send(sessionId) {
+    const prompt = this.input.value.trim();
+    if (!prompt) return;
+
+    // One-time warning about permissions mode
+    if (!this.warningShown) {
+      this.warningShown = true;
+      const ok = confirm(
+        'This will run Claude CLI with --dangerously-skip-permissions for non-interactive mode. ' +
+        'Claude will be able to execute tools without confirmation.\n\n' +
+        'Continue?'
+      );
+      if (!ok) return;
+    }
+
+    this.sendBtn.disabled = true;
+    this.statusEl.textContent = 'Starting...';
+    this.sessionId = sessionId || (window.appController?.session?.sessionId);
+
+    try {
+      const resp = await fetch(API_BASE + '/api/prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          sessionId: this.sessionId,
+        }),
+      });
+
+      const result = await resp.json();
+      if (!resp.ok) {
+        this.statusEl.textContent = result.error || 'Failed';
+        this.sendBtn.disabled = false;
+        return;
+      }
+
+      this.sessionId = result.sessionId;
+      this.input.value = '';
+      this.statusEl.textContent = 'Running...';
+      this.stopBtn.classList.remove('hidden');
+
+      // Enter live mode for this session
+      startLive(result.sessionId);
+
+      // Start polling for completion
+      this.startPolling();
+    } catch (err) {
+      this.statusEl.textContent = 'Error: ' + err.message;
+      this.sendBtn.disabled = false;
+    }
+  }
+
+  async stop() {
+    try {
+      await fetch(API_BASE + '/api/prompt/stop', { method: 'POST' });
+      this.statusEl.textContent = 'Stopped';
+      this.onComplete();
+    } catch (err) {
+      this.statusEl.textContent = 'Stop failed';
+    }
+  }
+
+  startPolling() {
+    this.stopPolling();
+    this.pollTimer = setInterval(async () => {
+      try {
+        const resp = await fetch(API_BASE + '/api/prompt/status');
+        const status = await resp.json();
+
+        if (status.running) {
+          this.statusEl.textContent = `Running (${Math.round(status.elapsed || 0)}s)`;
+        } else {
+          if (status.error) {
+            this.statusEl.textContent = 'Error: ' + status.error.slice(0, 60);
+          } else {
+            this.statusEl.textContent = 'Completed';
+          }
+          this.onComplete();
+        }
+      } catch {
+        // Server unavailable, stop polling
+        this.onComplete();
+      }
+    }, 2000);
+  }
+
+  stopPolling() {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
+  onComplete() {
+    this.stopPolling();
+    this.sendBtn.disabled = false;
+    this.stopBtn.classList.add('hidden');
+  }
+}
+
+let promptManager = null;
+
+// ─────────────────────────────────────────────
 // Wire controls (shared between replay and live)
 // ─────────────────────────────────────────────
 let keydownHandler = null;
@@ -2345,12 +2923,18 @@ function wireControls(controller, renderer) {
     controller.seekTo(parseInt(e.target.value));
   });
 
+  document.getElementById('layout-select').addEventListener('change', (e) => {
+    renderer.setLayout(e.target.value);
+  });
+
   document.getElementById('btn-reset').addEventListener('click', () => {
     controller.pause();
     renderer.clear();
     stopLive();
+    if (promptManager) promptManager.hide();
     showLanding();
     window.appController = null;
+    document.getElementById('layout-select').value = 'force';
     if (keydownHandler) {
       document.removeEventListener('keydown', keydownHandler);
       keydownHandler = null;
@@ -2379,6 +2963,24 @@ function wireControls(controller, renderer) {
 document.getElementById('btn-refresh')?.addEventListener('click', async () => {
   const sessions = await checkServer();
   if (sessions) renderSessionBrowser(sessions);
+});
+
+// New session from landing page
+document.getElementById('btn-new-session')?.addEventListener('click', () => {
+  const input = document.getElementById('new-session-input');
+  const prompt = input.value.trim();
+  if (!prompt) return;
+  if (!promptManager) promptManager = new PromptManager();
+  showApp();
+  promptManager.show();
+  promptManager.input.value = prompt;
+  promptManager.send(null); // null = new session
+});
+
+document.getElementById('new-session-input')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    document.getElementById('btn-new-session')?.click();
+  }
 });
 
 // ─────────────────────────────────────────────

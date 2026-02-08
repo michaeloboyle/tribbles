@@ -11,10 +11,14 @@ Usage:
 """
 
 import http.server
+import glob as globmod
 import json
 import os
+import signal
+import subprocess
 import sys
 import time
+import uuid
 import webbrowser
 import threading
 from pathlib import Path
@@ -24,6 +28,104 @@ CLAUDE_DIR = Path.home() / ".claude" / "projects"
 PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8777
 LIVE_MODE = "--live" in sys.argv
 SCRIPT_DIR = Path(__file__).parent
+
+
+class ClaudeProcess:
+    """Singleton tracking the active Claude CLI subprocess."""
+    process = None        # subprocess.Popen
+    session_id = None     # UUID string
+    mode = None           # "new" or "resume"
+    error = None          # error message if failed
+    started_at = None     # time.time()
+    thread = None         # threading.Thread running the process
+    lock = threading.Lock()
+
+    @classmethod
+    def is_running(cls):
+        with cls.lock:
+            return cls.process is not None and cls.process.poll() is None
+
+    @classmethod
+    def start(cls, prompt, session_id=None):
+        with cls.lock:
+            if cls.process is not None and cls.process.poll() is None:
+                return None, "Claude is already running"
+
+            cls.error = None
+
+            if session_id:
+                cls.session_id = session_id
+                cls.mode = "resume"
+                cmd = [
+                    "claude", "--resume", session_id,
+                    "--print", prompt,
+                    "--dangerously-skip-permissions",
+                ]
+            else:
+                cls.session_id = str(uuid.uuid4())
+                cls.mode = "new"
+                cmd = [
+                    "claude", "--print", prompt,
+                    "--session-id", cls.session_id,
+                    "--dangerously-skip-permissions",
+                ]
+
+            cls.started_at = time.time()
+
+            def run():
+                try:
+                    cls.process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+                    cls.process.wait()
+                    if cls.process.returncode != 0:
+                        stderr = cls.process.stderr.read().decode("utf-8", errors="replace")
+                        cls.error = stderr[:500] if stderr else f"Exit code {cls.process.returncode}"
+                except Exception as e:
+                    cls.error = str(e)
+
+            cls.thread = threading.Thread(target=run, daemon=True)
+            cls.thread.start()
+            return cls.session_id, None
+
+    @classmethod
+    def stop(cls):
+        with cls.lock:
+            if cls.process is None or cls.process.poll() is not None:
+                return False
+            try:
+                cls.process.terminate()
+                # Give it 3 seconds to terminate gracefully
+                for _ in range(30):
+                    if cls.process.poll() is not None:
+                        return True
+                    time.sleep(0.1)
+                cls.process.kill()
+            except Exception:
+                pass
+            return True
+
+    @classmethod
+    def status(cls):
+        with cls.lock:
+            running = cls.process is not None and cls.process.poll() is None
+            elapsed = time.time() - cls.started_at if cls.started_at and running else None
+            return {
+                "running": running,
+                "sessionId": cls.session_id,
+                "mode": cls.mode,
+                "error": cls.error,
+                "elapsed": round(elapsed, 1) if elapsed else None,
+            }
+
+    @classmethod
+    def find_session_file(cls, session_id):
+        """Find the JSONL file for a session ID, searching all project dirs."""
+        pattern = str(CLAUDE_DIR / "*" / f"{session_id}.jsonl")
+        matches = globmod.glob(pattern)
+        return matches[0] if matches else None
 
 
 def scan_sessions():
@@ -258,12 +360,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not session_id:
                 self.send_error(400, "Missing id parameter")
                 return
+
+            # Find the session file - check known sessions first, then glob
             session = next((s for s in Handler.sessions if s["id"] == session_id), None)
             if not session:
                 Handler.sessions = scan_sessions()
                 session = next((s for s in Handler.sessions if s["id"] == session_id), None)
-            if not session:
-                self.send_error(404, "Session not found")
+
+            filepath = session["file"] if session else None
+
+            # If not found, try glob discovery (for newly spawned sessions)
+            if not filepath:
+                filepath = ClaudeProcess.find_session_file(session_id)
+
+            # If still not found, poll up to 10 seconds for the file to appear
+            if not filepath:
+                for _ in range(20):
+                    time.sleep(0.5)
+                    filepath = ClaudeProcess.find_session_file(session_id)
+                    if filepath:
+                        break
+
+            if not filepath:
+                self.send_error(404, "Session file not found")
                 return
 
             self.send_response(200)
@@ -273,7 +392,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
 
-            filepath = session["file"]
             try:
                 with open(filepath, "r") as f:
                     # Send all existing content as initial batch
@@ -304,6 +422,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             active = [s for s in Handler.sessions if s.get("active")]
             self.send_json(active[0] if active else None)
 
+        elif parsed.path == "/api/prompt/status":
+            self.send_json(ClaudeProcess.status())
+
         elif parsed.path == "/api/open":
             # Open a file in the default editor
             params = parse_qs(parsed.query)
@@ -319,6 +440,52 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         else:
             super().do_GET()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length > 0 else b""
+
+        if parsed.path == "/api/prompt":
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_error(400, "Invalid JSON")
+                return
+
+            prompt = data.get("prompt", "").strip()
+            if not prompt:
+                self.send_error(400, "Missing prompt")
+                return
+
+            session_id = data.get("sessionId")
+            result_id, error = ClaudeProcess.start(prompt, session_id)
+            if error:
+                self.send_response(409)
+                body_bytes = json.dumps({"error": error}).encode("utf-8")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body_bytes)
+                return
+
+            self.send_json({"sessionId": result_id, "status": "started", "mode": ClaudeProcess.mode})
+
+        elif parsed.path == "/api/prompt/stop":
+            stopped = ClaudeProcess.stop()
+            self.send_json({"stopped": stopped})
+
+        else:
+            self.send_error(404, "Not found")
+
+    def do_OPTIONS(self):
+        """Handle CORS preflight for POST endpoints."""
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
 
     def send_json(self, data):
         body = json.dumps(data).encode("utf-8")
@@ -351,7 +518,7 @@ def main():
         print(f"Latest: [{label}] {top['firstMessage'][:60]}")
 
     http.server.HTTPServer.allow_reuse_address = True
-    server = http.server.HTTPServer(("127.0.0.1", PORT), Handler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"\nServing at http://localhost:{PORT}")
     print("Press Ctrl+C to stop\n")
 
