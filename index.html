@@ -107,7 +107,7 @@ body {
 /* ── App Layout ── */
 #app {
   display: grid;
-  grid-template-rows: 44px 1fr 28px;
+  grid-template-rows: 44px auto 1fr 28px;
   height: 100vh;
 }
 
@@ -815,6 +815,61 @@ body {
   white-space: nowrap;
 }
 
+.prompt-toggle {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.prompt-toggle input[type="checkbox"] {
+  accent-color: var(--accent-user);
+  cursor: pointer;
+}
+
+/* ── Claude Output Bar (interactive response) ── */
+#claude-output-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: rgba(231, 76, 60, 0.1);
+  border-bottom: 1px solid var(--accent-bash);
+  font-size: 11px;
+}
+
+#claude-output-bar.hidden {
+  display: none;
+}
+
+#claude-output-text {
+  flex: 1;
+  color: var(--accent-bash);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#respond-input {
+  width: 200px;
+  padding: 3px 8px;
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--accent-bash);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+}
+
+#respond-input:focus {
+  border-color: var(--accent-user);
+}
+
 /* ── Continue Button on Session Cards ── */
 .session-btn.continue-btn {
   border-color: var(--accent-user);
@@ -929,6 +984,9 @@ body {
     </div>
     <div id="live-indicator"><span class="live-dot"></span> LIVE</div>
     <div id="prompt-bar" class="control-group prompt hidden">
+      <label class="prompt-toggle" title="When unchecked, Claude will ask before running tools">
+        <input type="checkbox" id="skip-permissions"> Auto-approve
+      </label>
       <input type="text" id="prompt-input" placeholder="Send a prompt to Claude...">
       <button id="btn-send" class="prompt-btn send">Send</button>
       <button id="btn-stop-prompt" class="prompt-btn stop hidden">Stop</button>
@@ -939,6 +997,12 @@ body {
       <button id="btn-reset">Reset</button>
     </div>
   </header>
+
+  <div id="claude-output-bar" class="hidden">
+    <div id="claude-output-text"></div>
+    <input type="text" id="respond-input" placeholder="Type your response...">
+    <button id="btn-respond" class="prompt-btn send">Reply</button>
+  </div>
 
   <div id="main">
     <aside id="message-log">
@@ -2768,24 +2832,32 @@ function stopLive() {
 class PromptManager {
   constructor() {
     this.pollTimer = null;
-    this.warningShown = false;
     this.bar = document.getElementById('prompt-bar');
     this.input = document.getElementById('prompt-input');
     this.sendBtn = document.getElementById('btn-send');
     this.stopBtn = document.getElementById('btn-stop-prompt');
     this.statusEl = document.getElementById('prompt-status');
+    this.skipPermsCheckbox = document.getElementById('skip-permissions');
+    this.outputBar = document.getElementById('claude-output-bar');
+    this.outputText = document.getElementById('claude-output-text');
+    this.respondInput = document.getElementById('respond-input');
+    this.respondBtn = document.getElementById('btn-respond');
 
     this.sendBtn.addEventListener('click', () => this.send());
     this.stopBtn.addEventListener('click', () => this.stop());
+    this.respondBtn.addEventListener('click', () => this.respond());
 
-    // Prevent keyboard shortcuts when typing in prompt
-    this.input.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        this.send();
-      }
-    });
+    // Prevent keyboard shortcuts when typing in prompt/respond inputs
+    for (const input of [this.input, this.respondInput]) {
+      input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (input === this.input) this.send();
+          else this.respond();
+        }
+      });
+    }
   }
 
   show() {
@@ -2796,23 +2868,26 @@ class PromptManager {
   hide() {
     this.bar.classList.add('hidden');
     this.bar.classList.remove('visible');
+    this.hideOutputBar();
     this.stopPolling();
+  }
+
+  showOutputBar(text) {
+    this.outputText.textContent = text;
+    this.outputBar.classList.remove('hidden');
+    this.respondInput.focus();
+  }
+
+  hideOutputBar() {
+    this.outputBar.classList.add('hidden');
+    this.respondInput.value = '';
   }
 
   async send(sessionId) {
     const prompt = this.input.value.trim();
     if (!prompt) return;
 
-    // One-time warning about permissions mode
-    if (!this.warningShown) {
-      this.warningShown = true;
-      const ok = confirm(
-        'This will run Claude CLI with --dangerously-skip-permissions for non-interactive mode. ' +
-        'Claude will be able to execute tools without confirmation.\n\n' +
-        'Continue?'
-      );
-      if (!ok) return;
-    }
+    const skipPermissions = this.skipPermsCheckbox.checked;
 
     this.sendBtn.disabled = true;
     this.statusEl.textContent = 'Starting...';
@@ -2825,6 +2900,7 @@ class PromptManager {
         body: JSON.stringify({
           prompt,
           sessionId: this.sessionId,
+          skipPermissions,
         }),
       });
 
@@ -2843,11 +2919,35 @@ class PromptManager {
       // Enter live mode for this session
       startLive(result.sessionId);
 
-      // Start polling for completion
+      // Start polling for completion and input requests
       this.startPolling();
     } catch (err) {
       this.statusEl.textContent = 'Error: ' + err.message;
       this.sendBtn.disabled = false;
+    }
+  }
+
+  async respond() {
+    const text = this.respondInput.value.trim();
+    if (!text) return;
+
+    try {
+      const resp = await fetch(API_BASE + '/api/prompt/respond', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+
+      const result = await resp.json();
+      if (result.ok) {
+        this.respondInput.value = '';
+        this.hideOutputBar();
+        this.statusEl.textContent = 'Running...';
+      } else {
+        this.statusEl.textContent = 'Respond failed: ' + (result.error || '');
+      }
+    } catch (err) {
+      this.statusEl.textContent = 'Respond error: ' + err.message;
     }
   }
 
@@ -2869,7 +2969,16 @@ class PromptManager {
         const status = await resp.json();
 
         if (status.running) {
-          this.statusEl.textContent = `Running (${Math.round(status.elapsed || 0)}s)`;
+          if (status.waitingForInput) {
+            // Show the last few output lines as the prompt
+            const outputLines = status.output || [];
+            const lastLines = outputLines.slice(-3).join('\n');
+            this.statusEl.textContent = 'Waiting for input...';
+            this.showOutputBar(lastLines || 'Claude is waiting for your response');
+          } else {
+            this.hideOutputBar();
+            this.statusEl.textContent = `Running (${Math.round(status.elapsed || 0)}s)`;
+          }
         } else {
           if (status.error) {
             this.statusEl.textContent = 'Error: ' + status.error.slice(0, 60);
@@ -2896,6 +3005,7 @@ class PromptManager {
     this.stopPolling();
     this.sendBtn.disabled = false;
     this.stopBtn.classList.add('hidden');
+    this.hideOutputBar();
   }
 }
 

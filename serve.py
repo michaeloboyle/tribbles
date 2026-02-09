@@ -29,6 +29,10 @@ PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 
 LIVE_MODE = "--live" in sys.argv
 SCRIPT_DIR = Path(__file__).parent
 
+# Resolve the claude binary — prefer ~/.claude/local/claude over PATH
+_local_claude = Path.home() / ".claude" / "local" / "claude"
+CLAUDE_BIN = str(_local_claude) if _local_claude.exists() else "claude"
+
 
 class ClaudeProcess:
     """Singleton tracking the active Claude CLI subprocess."""
@@ -38,6 +42,9 @@ class ClaudeProcess:
     error = None          # error message if failed
     started_at = None     # time.time()
     thread = None         # threading.Thread running the process
+    output_lines = []     # captured stdout lines
+    output_lock = threading.Lock()
+    waiting_for_input = False  # True when Claude is prompting the user
     lock = threading.Lock()
 
     @classmethod
@@ -46,49 +53,178 @@ class ClaudeProcess:
             return cls.process is not None and cls.process.poll() is None
 
     @classmethod
-    def start(cls, prompt, session_id=None):
+    def start(cls, prompt, session_id=None, skip_permissions=False):
         with cls.lock:
             if cls.process is not None and cls.process.poll() is None:
                 return None, "Claude is already running"
 
             cls.error = None
+            cls.waiting_for_input = False
+            cls.interactive = not skip_permissions
+            with cls.output_lock:
+                cls.output_lines = []
 
-            if session_id:
-                cls.session_id = session_id
-                cls.mode = "resume"
-                cmd = [
-                    "claude", "--resume", session_id,
-                    "--print", prompt,
-                    "--dangerously-skip-permissions",
-                ]
+            if cls.interactive:
+                # Interactive mode: use stream-json for multi-turn
+                cmd = [CLAUDE_BIN, "--print",
+                       "--output-format", "stream-json",
+                       "--input-format", "stream-json",
+                       "--verbose"]
+                if session_id:
+                    cls.session_id = session_id
+                    cls.mode = "resume"
+                    cmd.extend(["--resume", session_id])
+                else:
+                    cls.session_id = str(uuid.uuid4())
+                    cls.mode = "new"
+                    cmd.extend(["--session-id", cls.session_id])
             else:
-                cls.session_id = str(uuid.uuid4())
-                cls.mode = "new"
-                cmd = [
-                    "claude", "--print", prompt,
-                    "--session-id", cls.session_id,
-                    "--dangerously-skip-permissions",
-                ]
+                # Auto-approve mode: single-shot, close stdin
+                if session_id:
+                    cls.session_id = session_id
+                    cls.mode = "resume"
+                    cmd = [
+                        CLAUDE_BIN, "--resume", session_id,
+                        "--print", prompt,
+                        "--dangerously-skip-permissions",
+                    ]
+                else:
+                    cls.session_id = str(uuid.uuid4())
+                    cls.mode = "new"
+                    cmd = [
+                        CLAUDE_BIN, "--print", prompt,
+                        "--session-id", cls.session_id,
+                        "--dangerously-skip-permissions",
+                    ]
 
             cls.started_at = time.time()
+            initial_prompt = prompt  # capture for thread
 
             def run():
                 try:
                     cls.process = subprocess.Popen(
                         cmd,
+                        stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                     )
+
+                    if cls.interactive:
+                        # Send the initial prompt via stream-json stdin
+                        msg = json.dumps({
+                            "type": "user",
+                            "message": {
+                                "role": "user",
+                                "content": [{"type": "text", "text": initial_prompt}]
+                            }
+                        })
+                        cls.process.stdin.write((msg + "\n").encode("utf-8"))
+                        cls.process.stdin.flush()
+                    else:
+                        # Non-interactive: close stdin so Claude exits after responding
+                        try:
+                            cls.process.stdin.close()
+                        except Exception:
+                            pass
+
+                    # Read stdout in a background thread to capture output
+                    stdout_thread = threading.Thread(
+                        target=cls._read_stdout, daemon=True
+                    )
+                    stdout_thread.start()
+
                     cls.process.wait()
+                    stdout_thread.join(timeout=2)
+
                     if cls.process.returncode != 0:
                         stderr = cls.process.stderr.read().decode("utf-8", errors="replace")
                         cls.error = stderr[:500] if stderr else f"Exit code {cls.process.returncode}"
                 except Exception as e:
                     cls.error = str(e)
+                finally:
+                    cls.waiting_for_input = False
 
             cls.thread = threading.Thread(target=run, daemon=True)
             cls.thread.start()
             return cls.session_id, None
+
+    @classmethod
+    def _read_stdout(cls):
+        """Read stdout line by line, extract text and detect completion."""
+        try:
+            for raw_line in iter(cls.process.stdout.readline, b""):
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                if not line.strip():
+                    continue
+
+                if cls.interactive:
+                    # In stream-json mode, parse JSON messages
+                    try:
+                        data = json.loads(line)
+                        msg_type = data.get("type", "")
+
+                        if msg_type == "assistant":
+                            content = data.get("message", {}).get("content", [])
+                            for block in content:
+                                if block.get("type") == "text":
+                                    text = block["text"]
+                                    with cls.output_lock:
+                                        cls.output_lines.append(text)
+                                        if len(cls.output_lines) > 200:
+                                            cls.output_lines = cls.output_lines[-200:]
+                                    # Detect questions — Claude is waiting for user
+                                    if text.rstrip().endswith("?"):
+                                        cls.waiting_for_input = True
+                                elif block.get("type") == "tool_use":
+                                    tool_name = block.get("name", "")
+                                    with cls.output_lock:
+                                        cls.output_lines.append(f"[Using {tool_name}...]")
+
+                        elif msg_type == "result":
+                            # Session turn completed
+                            result_text = data.get("result", "")
+                            if result_text:
+                                with cls.output_lock:
+                                    cls.output_lines.append(f"--- Done ---")
+                            # In interactive mode, Claude waits for next input after result
+                            cls.waiting_for_input = True
+
+                    except json.JSONDecodeError:
+                        with cls.output_lock:
+                            cls.output_lines.append(line)
+                else:
+                    # Plain text mode
+                    with cls.output_lock:
+                        cls.output_lines.append(line)
+                        if len(cls.output_lines) > 200:
+                            cls.output_lines = cls.output_lines[-200:]
+
+        except (ValueError, OSError):
+            pass
+
+    @classmethod
+    def respond(cls, text):
+        """Send a response to Claude's stdin."""
+        with cls.lock:
+            if cls.process is None or cls.process.poll() is not None:
+                return False, "No running process"
+            if not cls.interactive:
+                return False, "Not in interactive mode"
+            try:
+                # Send as stream-json user message
+                msg = json.dumps({
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": text}]
+                    }
+                })
+                cls.process.stdin.write((msg + "\n").encode("utf-8"))
+                cls.process.stdin.flush()
+                cls.waiting_for_input = False
+                return True, None
+            except (BrokenPipeError, OSError) as e:
+                return False, str(e)
 
     @classmethod
     def stop(cls):
@@ -96,6 +232,11 @@ class ClaudeProcess:
             if cls.process is None or cls.process.poll() is not None:
                 return False
             try:
+                # Close stdin first to signal EOF
+                try:
+                    cls.process.stdin.close()
+                except Exception:
+                    pass
                 cls.process.terminate()
                 # Give it 3 seconds to terminate gracefully
                 for _ in range(30):
@@ -112,12 +253,17 @@ class ClaudeProcess:
         with cls.lock:
             running = cls.process is not None and cls.process.poll() is None
             elapsed = time.time() - cls.started_at if cls.started_at and running else None
+            with cls.output_lock:
+                # Return last 20 lines of output
+                recent_output = list(cls.output_lines[-20:])
             return {
                 "running": running,
                 "sessionId": cls.session_id,
                 "mode": cls.mode,
                 "error": cls.error,
                 "elapsed": round(elapsed, 1) if elapsed else None,
+                "waitingForInput": cls.waiting_for_input,
+                "output": recent_output,
             }
 
     @classmethod
@@ -459,7 +605,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
 
             session_id = data.get("sessionId")
-            result_id, error = ClaudeProcess.start(prompt, session_id)
+            skip_permissions = data.get("skipPermissions", False)
+            result_id, error = ClaudeProcess.start(prompt, session_id, skip_permissions)
             if error:
                 self.send_response(409)
                 body_bytes = json.dumps({"error": error}).encode("utf-8")
@@ -471,6 +618,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
 
             self.send_json({"sessionId": result_id, "status": "started", "mode": ClaudeProcess.mode})
+
+        elif parsed.path == "/api/prompt/respond":
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_error(400, "Invalid JSON")
+                return
+
+            text = data.get("text", "").strip()
+            if not text:
+                self.send_error(400, "Missing text")
+                return
+
+            ok, error = ClaudeProcess.respond(text)
+            if error:
+                self.send_json({"ok": False, "error": error})
+            else:
+                self.send_json({"ok": True})
 
         elif parsed.path == "/api/prompt/stop":
             stopped = ClaudeProcess.stop()
