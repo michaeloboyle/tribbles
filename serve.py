@@ -102,11 +102,16 @@ class ClaudeProcess:
 
             def run():
                 try:
+                    # Clean env: remove CLAUDECODE to allow spawning
+                    # from inside an existing Claude Code session
+                    clean_env = {k: v for k, v in os.environ.items()
+                                 if k != "CLAUDECODE"}
                     cls.process = subprocess.Popen(
                         cmd,
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
+                        env=clean_env,
                     )
 
                     if cls.interactive:
@@ -461,6 +466,127 @@ def human_age(seconds):
         return f"{d}d ago"
 
 
+def build_devtools_prompt(action, description, context):
+    """Build a context-enriched prompt from DevTools Bridge data.
+
+    Assembles the browser runtime context (DOM, styles, errors, network)
+    into a structured prompt that gives Claude Code full visibility into
+    both the app state and the source code.
+    """
+    parts = []
+
+    # Header
+    parts.append(f"# DevTools Bridge — {action.upper()}")
+    parts.append(f"\n**Request:** {description}")
+    parts.append(f"**App URL:** {context.get('url', 'unknown')}")
+    parts.append(f"**Viewport:** {context.get('viewport', {}).get('width', '?')}x{context.get('viewport', {}).get('height', '?')}")
+    parts.append(f"**Page Title:** {context.get('title', 'unknown')}")
+
+    # Element context
+    element = context.get("element", {})
+    if element:
+        parts.append("\n## Target Element")
+        if element.get("path"):
+            parts.append(f"**CSS Path:** `{element['path']}`")
+
+        serialized = element.get("serialized", {})
+        if serialized:
+            parts.append(f"**Tag:** `<{serialized.get('tag', '?')}>`")
+            attrs = serialized.get("attrs", {})
+            if attrs:
+                parts.append(f"**Attributes:** {json.dumps(attrs)}")
+
+            cs = serialized.get("computedStyle", {})
+            if cs:
+                # Only show non-default/interesting styles
+                style_lines = [f"  {k}: {v}" for k, v in cs.items() if v and v != "none" and v != "auto" and v != "normal" and v != "0px"]
+                if style_lines:
+                    parts.append("**Computed Styles:**")
+                    parts.append("```css")
+                    parts.extend(style_lines)
+                    parts.append("```")
+
+            rect = serialized.get("rect", {})
+            if rect:
+                parts.append(f"**Bounding Rect:** x={rect.get('x')}, y={rect.get('y')}, w={rect.get('width')}, h={rect.get('height')}")
+
+        parent = element.get("parent", {})
+        if parent:
+            parent_cs = parent.get("computedStyle", {})
+            if parent_cs:
+                parts.append(f"\n**Parent:** `<{parent.get('tag', '?')}>` — display: {parent_cs.get('display')}, position: {parent_cs.get('position')}, overflow: {parent_cs.get('overflow')}")
+
+    # Component state (React/Vue)
+    component = context.get("componentState")
+    if component:
+        parts.append(f"\n## Component State ({component.get('framework', 'unknown')})")
+        if component.get("componentName"):
+            parts.append(f"**Component:** `{component['componentName']}`")
+        if component.get("props"):
+            parts.append(f"**Props:** ```json\n{json.dumps(component['props'], indent=2)[:500]}\n```")
+        if component.get("state"):
+            parts.append(f"**State:** ```json\n{json.dumps(component['state'], indent=2)[:500]}\n```")
+
+    # Error context
+    target_error = context.get("targetError")
+    if target_error:
+        parts.append("\n## Target Error")
+        parts.append(f"**Message:** `{target_error.get('message', '')}`")
+        if target_error.get("stack"):
+            parts.append(f"**Stack:**\n```\n{target_error['stack'][:800]}\n```")
+
+    errors = context.get("consoleErrors", [])
+    if errors:
+        parts.append(f"\n## Console Errors ({len(errors)} recent)")
+        for err in errors[-5:]:
+            msg = err.get("args", [""])[0][:150]
+            src = err.get("source", "")
+            parts.append(f"- `{msg}`{' — ' + src if src else ''}")
+
+    # Network failures
+    network = context.get("networkFailures", [])
+    if network:
+        parts.append(f"\n## Network Failures ({len(network)} recent)")
+        for fail in network[-5:]:
+            status = fail.get("status", fail.get("error", "?"))
+            parts.append(f"- {fail.get('method', 'GET')} {fail.get('url', '?')} → {status}")
+
+    # Performance
+    perf = context.get("performance")
+    if perf:
+        nav = perf.get("navigation", {})
+        parts.append(f"\n## Performance")
+        parts.append(f"TTFB: {nav.get('ttfb', '?')}ms, DOM loaded: {nav.get('domContentLoaded', '?')}ms, Full load: {nav.get('loadComplete', '?')}ms")
+        slow = perf.get("slowResources", [])
+        if slow:
+            parts.append("Slow resources:")
+            for r in slow[:5]:
+                parts.append(f"  - {r.get('name', '?')} ({r.get('duration', '?')}ms)")
+
+    # Accessibility
+    a11y = context.get("accessibility")
+    if a11y and a11y.get("issues"):
+        parts.append(f"\n## Accessibility Issues ({len(a11y['issues'])})")
+        for issue in a11y["issues"][:10]:
+            parts.append(f"- [{issue.get('type')}] {issue.get('element', '')}")
+
+    # Instructions based on action
+    parts.append("\n## Instructions")
+    if action == "fix":
+        parts.append("Using the DOM context above, find the source file responsible and fix the issue.")
+        parts.append("After fixing, explain what you changed and why.")
+    elif action == "inspect":
+        parts.append("Analyze this element's layout, styling, and behavior.")
+        parts.append("Identify any issues and suggest specific improvements with file paths and line numbers.")
+    elif action == "trace":
+        parts.append("Trace this error to its root cause in the source code.")
+        parts.append("Show the causality chain and fix the underlying issue.")
+    else:
+        parts.append(f"Perform the requested '{action}' action using the context above.")
+
+    return "\n".join(parts)
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     sessions = []
 
@@ -640,6 +766,45 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif parsed.path == "/api/prompt/stop":
             stopped = ClaudeProcess.stop()
             self.send_json({"stopped": stopped})
+
+        elif parsed.path == "/api/devtools/session":
+            # DevTools Bridge: create a Claude Code session with DOM context
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_error(400, "Invalid JSON")
+                return
+
+            action = data.get("action", "fix")
+            description = data.get("description", "").strip()
+            context = data.get("context", {})
+
+            if not description:
+                self.send_error(400, "Missing description")
+                return
+
+            # Build a context-enriched prompt for Claude Code
+            prompt = build_devtools_prompt(action, description, context)
+
+            # Use auto-approve for devtools sessions (user approved from browser)
+            result_id, error = ClaudeProcess.start(prompt, skip_permissions=True)
+            if error:
+                self.send_response(409)
+                body_bytes = json.dumps({"error": error}).encode("utf-8")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body_bytes)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body_bytes)
+                return
+
+            self.send_json({
+                "status": "created",
+                "session_name": result_id,
+                "sessionId": result_id,
+                "action": action,
+                "description": description,
+            })
 
         else:
             self.send_error(404, "Not found")
