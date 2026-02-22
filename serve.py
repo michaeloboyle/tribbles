@@ -28,6 +28,7 @@ CLAUDE_DIR = Path.home() / ".claude" / "projects"
 PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8777
 LIVE_MODE = "--live" in sys.argv
 SCRIPT_DIR = Path(__file__).parent
+SNAPSHOTS_DIR = SCRIPT_DIR / "fix-snapshots"
 
 # Resolve the claude binary — prefer ~/.claude/local/claude over PATH
 _local_claude = Path.home() / ".claude" / "local" / "claude"
@@ -466,6 +467,77 @@ def human_age(seconds):
         return f"{d}d ago"
 
 
+# ── Fix Snapshot Tracking ─────────────────────────────────────
+# Tracks active fix sessions so we can capture before/after screenshots
+active_fixes = {}  # fix_id -> { session_id, description, before_path, after_path, status }
+
+
+def capture_screenshot(fix_id, label="before"):
+    """Capture a screenshot of localhost:{PORT} via Playwright subprocess.
+
+    Runs Playwright in a subprocess to avoid blocking the HTTP server.
+    Returns the path to the saved PNG.
+    """
+    SNAPSHOTS_DIR.mkdir(exist_ok=True)
+    out_path = SNAPSHOTS_DIR / f"{fix_id}-{label}.png"
+
+    try:
+        # Use node + playwright for screenshot (it's already installed for visual-qa)
+        script = f"""
+const {{ chromium }} = require('playwright');
+(async () => {{
+  const browser = await chromium.launch({{ headless: true }});
+  const page = await browser.newPage({{ viewport: {{ width: 1440, height: 900 }} }});
+  await page.goto('http://localhost:{PORT}', {{ waitUntil: 'load', timeout: 10000 }});
+  await page.waitForTimeout(500);
+  await page.screenshot({{ path: '{str(out_path).replace(chr(39), "")}', fullPage: false }});
+  await browser.close();
+}})();
+"""
+        result = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True, text=True, timeout=15,
+            env={k: v for k, v in os.environ.items() if k != "CLAUDECODE"},
+        )
+        if result.returncode == 0 and out_path.exists():
+            return str(out_path)
+        else:
+            print(f"[snapshot] {label} capture failed: {result.stderr[:200]}")
+            return None
+    except Exception as e:
+        print(f"[snapshot] {label} capture error: {e}")
+        return None
+
+
+def capture_after_screenshot(fix_id):
+    """Capture the 'after' screenshot for a completed fix.
+
+    Called in a background thread that polls for session completion.
+    """
+    fix = active_fixes.get(fix_id)
+    if not fix:
+        return
+
+    session_id = fix["session_id"]
+
+    # Poll for session completion (max 5 minutes)
+    for _ in range(300):
+        time.sleep(1)
+        if not ClaudeProcess.is_running():
+            break
+
+    # Wait a moment for any HMR/refresh to complete
+    time.sleep(2)
+
+    after_path = capture_screenshot(fix_id, "after")
+    if after_path:
+        fix["after_path"] = after_path
+        fix["status"] = "ready"
+        print(f"[snapshot] After screenshot captured: {after_path}")
+    else:
+        fix["status"] = "after_failed"
+
+
 def build_devtools_prompt(action, description, context):
     """Build a context-enriched prompt from DevTools Bridge data.
 
@@ -710,6 +782,54 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 subprocess.Popen(["open", filepath])
                 self.send_json({"ok": True, "path": filepath})
 
+        elif parsed.path == "/api/fix/snapshot":
+            # Get before/after screenshot status and paths for a fix
+            params = parse_qs(parsed.query)
+            fix_id = params.get("id", [None])[0]
+            if not fix_id:
+                self.send_error(400, "Missing id parameter")
+                return
+            fix = active_fixes.get(fix_id)
+            if not fix:
+                self.send_json({"error": "Fix not found", "fixId": fix_id})
+                return
+            self.send_json({
+                "fixId": fix_id,
+                "status": fix["status"],
+                "description": fix["description"],
+                "beforePath": fix.get("before_path"),
+                "afterPath": fix.get("after_path"),
+                "hasBeforeAfter": bool(fix.get("before_path") and fix.get("after_path")),
+            })
+
+        elif parsed.path == "/api/fix/snapshots":
+            # List all tracked fixes with snapshot status
+            result = []
+            for fid, fix in active_fixes.items():
+                result.append({
+                    "fixId": fid,
+                    "status": fix["status"],
+                    "description": fix["description"][:100],
+                    "hasBeforeAfter": bool(fix.get("before_path") and fix.get("after_path")),
+                })
+            self.send_json(result)
+
+        elif parsed.path.startswith("/fix-snapshots/"):
+            # Serve screenshot files from the snapshots directory
+            filename = parsed.path.replace("/fix-snapshots/", "")
+            filepath = SNAPSHOTS_DIR / filename
+            if filepath.exists() and filepath.suffix == ".png":
+                with open(filepath, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.send_error(404, "Snapshot not found")
+
         else:
             super().do_GET()
 
@@ -778,10 +898,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             action = data.get("action", "fix")
             description = data.get("description", "").strip()
             context = data.get("context", {})
+            fix_id = data.get("fixId")  # from bridge telemetry
 
             if not description:
                 self.send_error(400, "Missing description")
                 return
+
+            # Capture "before" screenshot (non-blocking, quick)
+            before_path = None
+            if action == "fix" and fix_id:
+                before_path = capture_screenshot(fix_id, "before")
 
             # Build a context-enriched prompt for Claude Code
             prompt = build_devtools_prompt(action, description, context)
@@ -798,12 +924,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(body_bytes)
                 return
 
+            # Track fix for after-capture
+            if fix_id:
+                active_fixes[fix_id] = {
+                    "session_id": result_id,
+                    "description": description,
+                    "before_path": before_path,
+                    "after_path": None,
+                    "status": "running",
+                }
+                # Start background thread to capture "after" screenshot
+                threading.Thread(
+                    target=capture_after_screenshot,
+                    args=(fix_id,),
+                    daemon=True,
+                ).start()
+
             self.send_json({
                 "status": "created",
                 "session_name": result_id,
                 "sessionId": result_id,
                 "action": action,
                 "description": description,
+                "fixId": fix_id,
+                "beforeScreenshot": before_path is not None,
             })
 
         else:

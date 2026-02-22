@@ -935,6 +935,114 @@ body {
     border-bottom: 1px solid var(--border);
   }
 }
+
+/* ── Fix Review Panel ── */
+#fix-review-panel {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  width: 480px;
+  max-height: 80vh;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px 0 0 0;
+  z-index: 10000;
+  font-size: 12px;
+  overflow: hidden;
+  box-shadow: -4px -4px 20px rgba(0,0,0,0.5);
+}
+#fix-review-panel.visible { display: flex; flex-direction: column; }
+#fix-review-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+#fix-review-header h3 { font-size: 13px; color: var(--text-bright); margin: 0; }
+#fix-review-close { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 16px; }
+#fix-review-body { padding: 12px; overflow-y: auto; flex: 1; }
+.fix-review-images {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 8px 0;
+}
+.fix-review-images .img-col { text-align: center; }
+.fix-review-images .img-col label {
+  display: block;
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+}
+.fix-review-images img {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.fix-review-images img:hover { border-color: var(--accent-user); }
+.fix-review-desc {
+  color: var(--text);
+  padding: 8px;
+  background: var(--bg-card);
+  border-radius: 4px;
+  margin: 8px 0;
+  word-break: break-word;
+}
+.fix-review-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.fix-review-actions button {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+.btn-approve { background: #1a3a1a; color: #4ade80; border-color: #2a5a2a !important; }
+.btn-approve:hover { background: #2a5a2a; }
+.btn-reject { background: #3a1a1a; color: #f87171; border-color: #5a2a2a !important; }
+.btn-reject:hover { background: #5a2a2a; }
+.btn-partial { background: #3a3a1a; color: #fbbf24; border-color: #5a5a2a !important; }
+.btn-partial:hover { background: #5a5a2a; }
+.fix-review-status {
+  text-align: center;
+  padding: 8px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+#fix-review-badge {
+  display: none;
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  background: var(--accent-user);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
+  z-index: 9999;
+  border: none;
+  box-shadow: 0 2px 8px rgba(74, 144, 217, 0.4);
+  transition: all 0.15s;
+}
+#fix-review-badge:hover { transform: scale(1.05); }
+#fix-review-badge.has-fixes { display: block; }
 </style>
 </head>
 <body>
@@ -3120,6 +3228,129 @@ document.getElementById('new-session-input')?.addEventListener('keydown', (e) =>
   }
 })()
 </script>
+<button id="fix-review-badge" onclick="fixReview.toggle()">Fix Review</button>
+
+<div id="fix-review-panel">
+  <div id="fix-review-header" onclick="fixReview.toggle()">
+    <h3>Fix Review</h3>
+    <button id="fix-review-close">&times;</button>
+  </div>
+  <div id="fix-review-body">
+    <div class="fix-review-status" id="fix-review-empty">No fixes to review</div>
+  </div>
+</div>
+
 <script src="/devtools-bridge.js"></script>
+<script>
+// ── Fix Review Panel Logic ──
+const fixReview = {
+  pollInterval: null,
+  currentFixId: null,
+
+  toggle() {
+    const panel = document.getElementById('fix-review-panel');
+    panel.classList.toggle('visible');
+    if (panel.classList.contains('visible')) {
+      this.refresh();
+    }
+  },
+
+  async refresh() {
+    try {
+      const resp = await fetch('/api/fix/snapshots');
+      const fixes = await resp.json();
+      const body = document.getElementById('fix-review-body');
+
+      if (!fixes.length) {
+        body.innerHTML = '<div class="fix-review-status">No fixes to review</div>';
+        document.getElementById('fix-review-badge').classList.remove('has-fixes');
+        return;
+      }
+
+      document.getElementById('fix-review-badge').classList.add('has-fixes');
+      document.getElementById('fix-review-badge').textContent = `Fix Review (${fixes.length})`;
+
+      let html = '';
+      for (const fix of fixes) {
+        html += `<div style="margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">`;
+        html += `<div class="fix-review-desc">${fix.description}</div>`;
+
+        if (fix.status === 'running') {
+          html += `<div class="fix-review-status">Session running... after screenshot pending</div>`;
+        } else if (fix.hasBeforeAfter) {
+          html += await this.renderDiff(fix.fixId);
+        } else if (fix.status === 'ready') {
+          html += `<div class="fix-review-status">Screenshots captured (partial)</div>`;
+        }
+
+        html += `<div class="fix-review-actions">`;
+        html += `<button class="btn-approve" onclick="fixReview.resolve('${fix.fixId}','success')">Approve</button>`;
+        html += `<button class="btn-partial" onclick="fixReview.resolve('${fix.fixId}','partial')">Partial</button>`;
+        html += `<button class="btn-reject" onclick="fixReview.resolve('${fix.fixId}','failure')">Reject</button>`;
+        html += `</div></div>`;
+      }
+      body.innerHTML = html;
+    } catch (e) {
+      console.warn('[fix-review] refresh error:', e);
+    }
+  },
+
+  async renderDiff(fixId) {
+    try {
+      const resp = await fetch(`/api/fix/snapshot?id=${fixId}`);
+      const data = await resp.json();
+      if (!data.beforePath || !data.afterPath) return '';
+
+      const beforeFile = data.beforePath.split('/').pop();
+      const afterFile = data.afterPath.split('/').pop();
+
+      return `<div class="fix-review-images">
+        <div class="img-col">
+          <label>Before</label>
+          <img src="/fix-snapshots/${beforeFile}" alt="Before" onclick="window.open(this.src)">
+        </div>
+        <div class="img-col">
+          <label>After</label>
+          <img src="/fix-snapshots/${afterFile}" alt="After" onclick="window.open(this.src)">
+        </div>
+      </div>`;
+    } catch { return ''; }
+  },
+
+  resolve(fixId, outcome) {
+    if (window.__claude && window.__claude.resolve) {
+      window.__claude.resolve(fixId, outcome);
+    }
+    // Remove from UI
+    this.refresh();
+  },
+
+  startPolling() {
+    // Poll every 5s for new fix snapshots
+    this.pollInterval = setInterval(() => {
+      fetch('/api/fix/snapshots')
+        .then(r => r.json())
+        .then(fixes => {
+          const badge = document.getElementById('fix-review-badge');
+          if (fixes.length > 0) {
+            badge.classList.add('has-fixes');
+            badge.textContent = `Fix Review (${fixes.length})`;
+          } else {
+            badge.classList.remove('has-fixes');
+          }
+          // Auto-refresh if panel is open
+          const panel = document.getElementById('fix-review-panel');
+          if (panel.classList.contains('visible')) {
+            this.refresh();
+          }
+        })
+        .catch(() => {});
+    }, 5000);
+  }
+};
+
+// Start polling after bridge loads
+fixReview.startPolling();
+</script>
 </body>
 </html>
