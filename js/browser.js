@@ -4,11 +4,14 @@ import { startReplay } from './replay.js';
 import { startLive } from './live.js';
 import { showApp } from './view.js';
 import { getPromptManager } from './prompt.js';
+import { applyTheme, resetToDefault, initTheme } from './theme.js';
 
 const API_BASE = window.location.origin;
 let serverAvailable = false;
 let paginationState = null;
 let listClickController = null;
+
+initTheme();
 
 export function isServerAvailable() {
   return serverAvailable;
@@ -23,11 +26,49 @@ export async function checkServer() {
       renderSessionBrowser(sessions);
       // Show new session bar
       document.getElementById('new-session-bar').classList.remove('hidden');
+      loadThemes();
       return sessions;
     }
   } catch {}
   return null;
 }
+
+async function loadThemes() {
+  const res = await fetch('/api/themes').catch(() => null);
+  if (!res?.ok) return;
+  const themes = await res.json();
+  const sel = document.getElementById('theme-select');
+  const dark = themes.filter(t => t.type !== 'light');
+  const light = themes.filter(t => t.type === 'light');
+  if (dark.length) {
+    const g = document.createElement('optgroup'); g.label = 'Dark';
+    dark.forEach(t => { const o = new Option(t.name, t.idx); g.append(o); });
+    sel.append(g);
+  }
+  if (light.length) {
+    const g = document.createElement('optgroup'); g.label = 'Light';
+    light.forEach(t => { const o = new Option(t.name, t.idx); g.append(o); });
+    sel.append(g);
+  }
+  // Restore saved selection
+  const saved = localStorage.getItem('tribbles-theme');
+  if (saved) {
+    try {
+      const name = JSON.parse(saved).name;
+      const opt = [...sel.options].find(o => o.text === name);
+      if (opt) opt.selected = true;
+    } catch {}
+  }
+}
+
+document.getElementById('theme-select').addEventListener('change', async (e) => {
+  if (e.target.value === '__default__') { resetToDefault(); return; }
+  const res = await fetch(`/api/theme?idx=${e.target.value}`);
+  if (res.ok) {
+    const json = await res.json();
+    applyTheme(json);
+  }
+});
 
 export function renderAnalysisCardHtml(a) {
   const rows = (a.areas || []).map(area =>
@@ -60,7 +101,7 @@ function renderDayHtml(dayKey, daySessions) {
   const dayDate = new Date(dayKey + 'T12:00:00');
   const dayLabel = dayDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   const sizeMB = (totalBytes / 1048576).toFixed(1);
-  const compTag = compactions > 0 ? `<span style="color:#e67e22">${compactions} compacted</span>` : '';
+  const compTag = compactions > 0 ? `<span style="color:var(--accent-write)">${compactions} compacted</span>` : '';
   const toolChipsDay = topTools.map(([name, count]) => {
     const color = TOOL_COLORS[name] || '#6a6a8a';
     return `<span class="session-tool-chip" style="background:${color}">${name} ${count}</span>`;

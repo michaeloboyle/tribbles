@@ -871,6 +871,68 @@ def build_devtools_prompt(action, description, context):
     return "\n".join(parts)
 
 
+def _load_jsonc(path):
+    """Load JSON with tolerance for comments and trailing commas."""
+    import re
+    with open(path) as f:
+        text = f.read()
+    # Strip comments while preserving strings: match strings or comments,
+    # keep strings, remove comments
+    def _replacer(m):
+        if m.group(1) is not None:
+            return m.group(1)  # keep quoted string
+        return ''  # remove comment
+    text = re.sub(r'("(?:[^"\\]|\\.)*")|(//.*?$|/\*.*?\*/)', _replacer, text, flags=re.MULTILINE | re.DOTALL)
+    # Strip trailing commas before } or ]
+    text = re.sub(r',\s*([}\]])', r'\1', text)
+    return json.loads(text, strict=False)
+
+
+def list_vsc_themes():
+    """Discover VS Code theme JSON files from installed extensions."""
+    base = os.path.expanduser("~/.vscode/extensions")
+    result = []
+    if not os.path.isdir(base):
+        return result
+
+    # Build a map from theme path -> (label, uiTheme) from each extension's package.json
+    pkg_map = {}  # resolved theme path -> {"label": ..., "uiTheme": ...}
+    for pkg_path in globmod.glob(f"{base}/*/package.json"):
+        try:
+            ext_dir = os.path.dirname(pkg_path)
+            with open(pkg_path) as f:
+                pkg = json.load(f)
+            for t in pkg.get("contributes", {}).get("themes", []):
+                rel = t.get("path", "")
+                abs_path = os.path.normpath(os.path.join(ext_dir, rel))
+                pkg_map[abs_path] = {
+                    "label": t.get("label", ""),
+                    "uiTheme": t.get("uiTheme", "vs-dark"),
+                }
+        except Exception:
+            pass
+
+    for path in sorted(globmod.glob(f"{base}/*/themes/*.json")):
+        try:
+            data = _load_jsonc(path)
+        except Exception:
+            continue
+
+        norm = os.path.normpath(path)
+        pkg_info = pkg_map.get(norm, {})
+        ui = pkg_info.get("uiTheme", "vs-dark")
+        theme_type = "light" if ui in ("vs", "hc-light") else "dark"
+        name = pkg_info.get("label") or data.get("name") or os.path.basename(path)
+
+        result.append({
+            "idx": len(result),
+            "name": name,
+            "type": theme_type,
+            "path": path,
+        })
+    return result
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     sessions = []
 
@@ -1049,6 +1111,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "hasBeforeAfter": bool(fix.get("before_path") and fix.get("after_path")),
                 })
             self.send_json(result)
+
+        elif parsed.path == "/api/themes":
+            themes = list_vsc_themes()
+            # Strip internal path from response
+            self.send_json([{k: v for k, v in t.items() if k != 'path'} for t in themes])
+
+        elif parsed.path == "/api/theme":
+            params = parse_qs(parsed.query)
+            idx = int(params.get("idx", ["0"])[0])
+            themes = list_vsc_themes()
+            if 0 <= idx < len(themes):
+                try:
+                    with open(themes[idx]["path"], "r") as f:
+                        self.send_json(json.load(f))
+                except Exception as e:
+                    self.send_error(500, str(e))
+            else:
+                self.send_error(404, "Theme not found")
 
         elif parsed.path.startswith("/fix-snapshots/"):
             # Serve screenshot files from the snapshots directory
