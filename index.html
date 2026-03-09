@@ -629,36 +629,42 @@ body {
   border-color: var(--accent-read);
 }
 
-.report-card {
+.day-summary-card {
   background: rgba(74, 144, 217, 0.06);
-  border: 1px solid rgba(74, 144, 217, 0.2);
+  border: 1px solid rgba(74, 144, 217, 0.15);
   border-radius: 6px;
-  padding: 10px 14px;
-  margin-bottom: 8px;
+  padding: 8px 14px;
+  margin-bottom: 4px;
   cursor: default;
-}
-.report-card h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
   font-size: 10px;
+}
+.day-summary-date {
   font-weight: 600;
   color: var(--accent-user);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 6px;
+  letter-spacing: 0.3px;
+  min-width: 70px;
 }
-.report-day-row {
+.day-summary-stats {
   display: flex;
   gap: 10px;
-  font-size: 10px;
   color: var(--text-dim);
-  padding: 3px 0;
-  border-bottom: 1px solid rgba(42,42,69,0.5);
-  align-items: baseline;
-  min-width: 0;
+  flex-wrap: wrap;
 }
-.report-day-row:last-child { border-bottom: none; }
-.report-day-date { color: var(--text); min-width: 52px; }
-.report-day-count { min-width: 62px; }
-.report-day-topics { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.7; }
+.day-summary-stats span { white-space: nowrap; }
+.day-summary-tools {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.day-summary-tools .session-tool-chip {
+  font-size: 9px;
+  padding: 1px 5px;
+}
 
 .session-status {
   display: flex;
@@ -2752,29 +2758,6 @@ async function checkServer() {
   return null;
 }
 
-function renderReportCards(report) {
-  const list = document.getElementById('session-list');
-  // Remove any existing report cards
-  list.querySelectorAll('.report-card').forEach(el => el.remove());
-  if (!report || !report.days || report.days.length === 0) return;
-
-  const card = document.createElement('div');
-  card.className = 'report-card';
-  const rows = report.days.slice(-7).map(d => {
-    const dateLabel = new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    const compTag = d.compactions > 0 ? ` <span style="color:#e67e22">${d.compactions}&#9986;</span>` : '';
-    const topics = d.firstMessages.slice(0, 3).join(' \u00b7 ');
-    return `<div class="report-day-row">
-      <span class="report-day-date">${dateLabel}</span>
-      <span class="report-day-count">${d.sessionCount} sessions${compTag}</span>
-      <span class="report-day-topics">${esc(topics)}</span>
-    </div>`;
-  }).join('');
-  card.innerHTML = `<h3>Last ${report.range} Days \u2014 ${report.sessionCount} sessions</h3>${rows}
-    <div style="font-size:9px;color:var(--text-dim);margin-top:5px">updated ${new Date(report.generatedAt).toLocaleTimeString()}</div>`;
-  list.insertAdjacentElement('afterbegin', card);
-}
-
 function renderSessionBrowser(sessions) {
   const browser = document.getElementById('session-browser');
   const list = document.getElementById('session-list');
@@ -2785,40 +2768,86 @@ function renderSessionBrowser(sessions) {
     return;
   }
 
-  list.innerHTML = sessions.map(s => {
-    const isActive = s.active;
-    const toolChips = Object.entries(s.toolCounts || {}).slice(0, 6).map(([name, count]) => {
+  // Group sessions by day (using startTime or endTime)
+  const byDay = {};
+  for (const s of sessions) {
+    const ts = s.startTime || s.endTime;
+    const dayKey = ts ? new Date(ts).toLocaleDateString('en-CA') : 'unknown'; // YYYY-MM-DD
+    (byDay[dayKey] ??= []).push(s);
+  }
+  const dayKeys = Object.keys(byDay).sort().reverse();
+
+  const html = [];
+  for (const dayKey of dayKeys) {
+    const daySessions = byDay[dayKey];
+    // Day summary card
+    const totalSteps = daySessions.reduce((a, s) => a + (s.stepEstimate || 0), 0);
+    const totalBytes = daySessions.reduce((a, s) => a + (s.sizeBytes || 0), 0);
+    const compactions = daySessions.filter(s => (s.sizeBytes || 0) > 5_000_000).length;
+    const toolTotals = {};
+    for (const s of daySessions) {
+      for (const [tool, count] of Object.entries(s.toolCounts || {})) {
+        toolTotals[tool] = (toolTotals[tool] || 0) + count;
+      }
+    }
+    const topTools = Object.entries(toolTotals).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const dayDate = new Date(dayKey + 'T12:00:00');
+    const dayLabel = dayDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const sizeMB = (totalBytes / 1048576).toFixed(1);
+    const compTag = compactions > 0 ? `<span style="color:#e67e22">${compactions} compacted</span>` : '';
+    const toolChipsDay = topTools.map(([name, count]) => {
       const color = TOOL_COLORS[name] || '#6a6a8a';
       return `<span class="session-tool-chip" style="background:${color}">${name} ${count}</span>`;
     }).join('');
 
-    const startDate = s.startTime ? new Date(s.startTime) : null;
-    const dateStr = startDate ? startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-    const timeStr = startDate ? startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
+    html.push(`<div class="day-summary-card">
+      <span class="day-summary-date">${dayLabel}</span>
+      <div class="day-summary-stats">
+        <span>${daySessions.length} sessions</span>
+        <span>${totalSteps} steps</span>
+        <span>${sizeMB} MB</span>
+        ${compTag}
+      </div>
+      <div class="day-summary-tools">${toolChipsDay}</div>
+    </div>`);
 
-    return `
-      <div class="session-card ${isActive ? 'active-session' : ''}" data-id="${s.id}">
-        <div class="session-status">
-          ${isActive ? '<span class="live-dot"></span>' : '<span style="color:var(--text-dim);font-size:10px">' + dateStr + '</span>'}
-          <span class="session-age">${isActive ? 'LIVE' : s.modifiedAgo}</span>
-        </div>
-        <div class="session-info">
-          <div class="session-msg">${esc(s.firstMessage)}</div>
-          <div class="session-meta">
-            <span>${s.model}</span>
-            <span>${s.stepEstimate} steps</span>
-            <span>${s.sizeHuman}</span>
-            ${timeStr ? `<span>${timeStr}</span>` : ''}
+    // Session cards for this day
+    for (const s of daySessions) {
+      const isActive = s.active;
+      const toolChips = Object.entries(s.toolCounts || {}).slice(0, 6).map(([name, count]) => {
+        const color = TOOL_COLORS[name] || '#6a6a8a';
+        return `<span class="session-tool-chip" style="background:${color}">${name} ${count}</span>`;
+      }).join('');
+
+      const startDate = s.startTime ? new Date(s.startTime) : null;
+      const dateStr = startDate ? startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+      const timeStr = startDate ? startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
+
+      html.push(`
+        <div class="session-card ${isActive ? 'active-session' : ''}" data-id="${s.id}">
+          <div class="session-status">
+            ${isActive ? '<span class="live-dot"></span>' : '<span style="color:var(--text-dim);font-size:10px">' + dateStr + '</span>'}
+            <span class="session-age">${isActive ? 'LIVE' : s.modifiedAgo}</span>
           </div>
-          ${toolChips ? `<div class="session-tools">${toolChips}</div>` : ''}
-        </div>
-        <div class="session-actions">
-          ${isActive ? `<button class="session-btn live-btn" data-action="live" data-id="${s.id}">Watch Live</button>` : ''}
-          <button class="session-btn continue-btn" data-action="continue" data-id="${s.id}">Continue</button>
-          <button class="session-btn" data-action="replay" data-id="${s.id}">Replay</button>
-        </div>
-      </div>`;
-  }).join('');
+          <div class="session-info">
+            <div class="session-msg">${esc(s.firstMessage)}</div>
+            <div class="session-meta">
+              <span>${s.model}</span>
+              <span>${s.stepEstimate} steps</span>
+              <span>${s.sizeHuman}</span>
+              ${timeStr ? `<span>${timeStr}</span>` : ''}
+            </div>
+            ${toolChips ? `<div class="session-tools">${toolChips}</div>` : ''}
+          </div>
+          <div class="session-actions">
+            ${isActive ? `<button class="session-btn live-btn" data-action="live" data-id="${s.id}">Watch Live</button>` : ''}
+            <button class="session-btn continue-btn" data-action="continue" data-id="${s.id}">Continue</button>
+            <button class="session-btn" data-action="replay" data-id="${s.id}">Replay</button>
+          </div>
+        </div>`);
+    }
+  }
+  list.innerHTML = html.join('');
 
   // Wire click handlers
   list.querySelectorAll('.session-btn').forEach(btn => {
@@ -2841,12 +2870,6 @@ function renderSessionBrowser(sessions) {
       else startReplay(id);
     });
   });
-
-  // Progressive load: fetch report card after sessions are rendered
-  fetch(API_BASE + '/api/report?days=7', { signal: AbortSignal.timeout(5000) })
-    .then(r => r.ok ? r.json() : null)
-    .then(report => { if (report) renderReportCards(report); })
-    .catch(() => {});
 }
 
 function showContinueInput(btn, sessionId) {
