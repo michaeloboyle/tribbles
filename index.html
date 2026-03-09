@@ -629,6 +629,37 @@ body {
   border-color: var(--accent-read);
 }
 
+.report-card {
+  background: rgba(74, 144, 217, 0.06);
+  border: 1px solid rgba(74, 144, 217, 0.2);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  cursor: default;
+}
+.report-card h3 {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-user);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+.report-day-row {
+  display: flex;
+  gap: 10px;
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(42,42,69,0.5);
+  align-items: baseline;
+  min-width: 0;
+}
+.report-day-row:last-child { border-bottom: none; }
+.report-day-date { color: var(--text); min-width: 52px; }
+.report-day-count { min-width: 62px; }
+.report-day-topics { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.7; }
+
 .session-status {
   display: flex;
   flex-direction: column;
@@ -2713,12 +2744,40 @@ async function checkServer() {
       serverAvailable = true;
       const sessions = await resp.json();
       renderSessionBrowser(sessions);
+      // Fetch activity report
+      try {
+        const rr = await fetch(API_BASE + '/api/report?days=7', { signal: AbortSignal.timeout(3000) });
+        if (rr.ok) renderReportCards(await rr.json());
+      } catch {}
       // Show new session bar
       document.getElementById('new-session-bar').classList.remove('hidden');
       return sessions;
     }
   } catch {}
   return null;
+}
+
+function renderReportCards(report) {
+  const list = document.getElementById('session-list');
+  // Remove any existing report cards
+  list.querySelectorAll('.report-card').forEach(el => el.remove());
+  if (!report || !report.days || report.days.length === 0) return;
+
+  const card = document.createElement('div');
+  card.className = 'report-card';
+  const rows = report.days.slice(-7).map(d => {
+    const dateLabel = new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const compTag = d.compactions > 0 ? ` <span style="color:#e67e22">${d.compactions}&#9986;</span>` : '';
+    const topics = d.firstMessages.slice(0, 3).join(' \u00b7 ');
+    return `<div class="report-day-row">
+      <span class="report-day-date">${dateLabel}</span>
+      <span class="report-day-count">${d.sessionCount} sessions${compTag}</span>
+      <span class="report-day-topics">${esc(topics)}</span>
+    </div>`;
+  }).join('');
+  card.innerHTML = `<h3>Last ${report.range} Days \u2014 ${report.sessionCount} sessions</h3>${rows}
+    <div style="font-size:9px;color:var(--text-dim);margin-top:5px">updated ${new Date(report.generatedAt).toLocaleTimeString()}</div>`;
+  list.insertAdjacentElement('afterbegin', card);
 }
 
 function renderSessionBrowser(sessions) {
@@ -3189,7 +3248,13 @@ function wireControls(controller, renderer) {
 // ─────────────────────────────────────────────
 document.getElementById('btn-refresh')?.addEventListener('click', async () => {
   const sessions = await checkServer();
-  if (sessions) renderSessionBrowser(sessions);
+  if (sessions) {
+    renderSessionBrowser(sessions);
+    try {
+      const rr = await fetch(API_BASE + '/api/report?days=7', { signal: AbortSignal.timeout(3000) });
+      if (rr.ok) renderReportCards(await rr.json());
+    } catch {}
+  }
 });
 
 // New session from landing page

@@ -21,6 +21,7 @@ import time
 import uuid
 import webbrowser
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -467,6 +468,51 @@ def human_age(seconds):
         return f"{d}d ago"
 
 
+def parse_ts(ts_str):
+    try:
+        return datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+    except Exception:
+        return datetime.fromtimestamp(0, tz=timezone.utc)
+
+
+def compute_report(days_back):
+    cutoff_ts = time.time() - (days_back * 86400)
+    all_sessions = scan_sessions()
+    in_range = [s for s in all_sessions
+                if s.get('endTime') and parse_ts(s['endTime']).timestamp() > cutoff_ts]
+
+    by_day = {}
+    for s in in_range:
+        if not s.get('startTime'):
+            continue
+        day = parse_ts(s['startTime']).strftime('%Y-%m-%d')
+        by_day.setdefault(day, []).append(s)
+
+    days = []
+    for day in sorted(by_day.keys()):
+        day_sessions = by_day[day]
+        tool_totals = {}
+        for s in day_sessions:
+            for tool, count in (s.get('toolCounts') or {}).items():
+                tool_totals[tool] = tool_totals.get(tool, 0) + count
+        days.append({
+            'date': day,
+            'sessionCount': len(day_sessions),
+            'totalSteps': sum(s['stepEstimate'] for s in day_sessions),
+            'totalBytes': sum(s['sizeBytes'] for s in day_sessions),
+            'topTools': sorted(tool_totals.items(), key=lambda x: -x[1])[:5],
+            'compactions': sum(1 for s in day_sessions if s['sizeBytes'] > 5_000_000),
+            'firstMessages': [s['firstMessage'] for s in day_sessions[:6]],
+        })
+
+    return {
+        'range': days_back,
+        'sessionCount': len(in_range),
+        'days': days,
+        'generatedAt': time.strftime('%Y-%m-%dT%H:%M:%S'),
+    }
+
+
 # ── Fix Snapshot Tracking ─────────────────────────────────────
 # Tracks active fix sessions so we can capture before/after screenshots
 active_fixes = {}  # fix_id -> { session_id, description, before_path, after_path, status }
@@ -766,6 +812,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             active = [s for s in Handler.sessions if s.get("active")]
             self.send_json(active[0] if active else None)
 
+        elif parsed.path == "/api/report":
+            params = parse_qs(parsed.query)
+            days = int(params.get("days", ["7"])[0])
+            days = min(max(days, 1), 30)
+            self.send_json(compute_report(days))
+
         elif parsed.path == "/api/prompt/status":
             self.send_json(ClaudeProcess.status())
 
@@ -992,7 +1044,7 @@ def main():
         print(f"Latest: [{label}] {top['firstMessage'][:60]}")
 
     http.server.HTTPServer.allow_reuse_address = True
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    server = http.server.ThreadingHTTPServer(("", PORT), Handler)
     print(f"\nServing at http://localhost:{PORT}")
     print("Press Ctrl+C to stop\n")
 
