@@ -666,6 +666,121 @@ body {
   padding: 1px 5px;
 }
 
+.week-analysis-card {
+  background: rgba(74, 144, 217, 0.08);
+  border: 1px solid rgba(74, 144, 217, 0.25);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  cursor: default;
+  font-size: 10px;
+}
+.week-analysis-card h3 {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-user);
+  margin-bottom: 8px;
+  letter-spacing: 0.3px;
+}
+.week-analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.week-analysis-stat {
+  text-align: center;
+}
+.week-analysis-stat .val {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+.week-analysis-stat .label {
+  color: var(--text-dim);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.week-analysis-projects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(74, 144, 217, 0.15);
+}
+.week-analysis-projects .proj-chip {
+  background: rgba(74, 144, 217, 0.1);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 9px;
+  color: var(--text-dim);
+}
+.week-analysis-projects .proj-chip .proj-count {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.analysis-areas {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(74, 144, 217, 0.15);
+}
+.analysis-area-row {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 6px;
+  font-size: 10px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.analysis-area-bar {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: rgba(74, 144, 217, 0.1);
+  border-radius: 3px;
+  z-index: 0;
+}
+.analysis-area-name {
+  position: relative; z-index: 1;
+  color: var(--text);
+  font-weight: 600;
+  min-width: 100px;
+}
+.analysis-area-pct {
+  position: relative; z-index: 1;
+  color: var(--accent-user);
+  font-weight: 700;
+  min-width: 30px;
+  text-align: right;
+}
+.analysis-area-detail {
+  position: relative; z-index: 1;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+.analysis-warnings {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(230, 126, 34, 0.2);
+}
+.analysis-warning {
+  color: #e67e22;
+  font-size: 9px;
+  padding: 2px 0;
+}
+.analysis-warning::before {
+  content: '\25B2 ';
+  font-size: 7px;
+}
+
 .session-status {
   display: flex;
   flex-direction: column;
@@ -2777,7 +2892,77 @@ function renderSessionBrowser(sessions) {
   }
   const dayKeys = Object.keys(byDay).sort().reverse();
 
+  // Weekly analysis card
   const html = [];
+  if (dayKeys.length >= 2) {
+    const allSteps = sessions.reduce((a, s) => a + (s.stepEstimate || 0), 0);
+    const allBytes = sessions.reduce((a, s) => a + (s.sizeBytes || 0), 0);
+    const allCompactions = sessions.filter(s => (s.sizeBytes || 0) > 5_000_000).length;
+    const allToolTotals = {};
+    const projectTotals = {};
+    for (const s of sessions) {
+      for (const [tool, count] of Object.entries(s.toolCounts || {})) {
+        allToolTotals[tool] = (allToolTotals[tool] || 0) + count;
+      }
+      const proj = s.project || 'unknown';
+      projectTotals[proj] = (projectTotals[proj] || 0) + 1;
+    }
+    const topProjects = Object.entries(projectTotals).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    const topToolsAll = Object.entries(allToolTotals).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const sizeMBAll = (allBytes / 1048576).toFixed(0);
+    const avgPerDay = (sessions.length / dayKeys.length).toFixed(1);
+    const firstDay = new Date(dayKeys[dayKeys.length - 1] + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const lastDay = new Date(dayKeys[0] + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+    // Project area breakdown by steps
+    const projSteps = {};
+    for (const s of sessions) {
+      const proj = (s.project || 'unknown').split('/').pop();
+      projSteps[proj] = (projSteps[proj] || 0) + (s.stepEstimate || 0);
+    }
+    const projBySteps = Object.entries(projSteps).sort((a, b) => b[1] - a[1]);
+    const projRows = projBySteps.slice(0, 6).map(([p, steps]) => {
+      const pct = Math.round((steps / allSteps) * 100);
+      const count = projectTotals[Object.keys(projectTotals).find(k => k.split('/').pop() === p)] || 0;
+      return `<div class="analysis-area-row">
+        <span class="analysis-area-bar" style="width:${Math.max(pct, 2)}%"></span>
+        <span class="analysis-area-name">${esc(p)}</span>
+        <span class="analysis-area-pct">${pct}%</span>
+        <span class="analysis-area-detail">${count} sessions \u00b7 ${steps.toLocaleString()} steps</span>
+      </div>`;
+    }).join('');
+
+    // Waste signals
+    const warnings = [];
+    if (allCompactions > 0) warnings.push(`${allCompactions} compactions \u2014 sessions run to exhaustion`);
+    const uniqueProjects = Object.keys(projSteps).length;
+    if (uniqueProjects > 5) warnings.push(`${uniqueProjects} project areas \u2014 high context switching`);
+    const busiestDay = dayKeys.reduce((best, dk) => byDay[dk].length > (byDay[best]?.length || 0) ? dk : best, dayKeys[0]);
+    const quietestDay = dayKeys.reduce((best, dk) => byDay[dk].length < (byDay[best]?.length || Infinity) ? dk : best, dayKeys[0]);
+    if (byDay[busiestDay].length > byDay[quietestDay].length * 3) {
+      warnings.push(`Uneven load: ${byDay[busiestDay].length} sessions on busiest day vs ${byDay[quietestDay].length} on quietest`);
+    }
+    const warningHtml = warnings.length > 0
+      ? `<div class="analysis-warnings">${warnings.map(w => `<div class="analysis-warning">${esc(w)}</div>`).join('')}</div>`
+      : '';
+
+    const toolLine = topToolsAll.map(([n, c]) => `${n} ${c}`).join(' \u00b7 ');
+
+    html.push(`<div class="week-analysis-card">
+      <h3>${firstDay} \u2013 ${lastDay} \u00b7 ${dayKeys.length} days</h3>
+      <div class="week-analysis-grid">
+        <div class="week-analysis-stat"><div class="val">${sessions.length}</div><div class="label">sessions</div></div>
+        <div class="week-analysis-stat"><div class="val">${avgPerDay}</div><div class="label">avg / day</div></div>
+        <div class="week-analysis-stat"><div class="val">${allSteps.toLocaleString()}</div><div class="label">steps</div></div>
+        <div class="week-analysis-stat"><div class="val">${sizeMBAll}</div><div class="label">MB context</div></div>
+        <div class="week-analysis-stat"><div class="val">${allCompactions}</div><div class="label">compactions</div></div>
+      </div>
+      <div class="analysis-areas">${projRows}</div>
+      <div style="color:var(--text-dim);margin-top:6px;font-size:9px">Top tools: ${esc(toolLine)}</div>
+      ${warningHtml}
+    </div>`);
+  }
+
   for (const dayKey of dayKeys) {
     const daySessions = byDay[dayKey];
     // Day summary card
