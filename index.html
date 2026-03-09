@@ -781,6 +781,67 @@ body {
   font-size: 7px;
 }
 
+.analysis-card {
+  background: rgba(74, 144, 217, 0.08);
+  border: 1px solid rgba(74, 144, 217, 0.25);
+  border-left: 3px solid var(--accent-user);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 6px;
+  cursor: default;
+  font-size: 10px;
+}
+.analysis-card h3 {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-user);
+  margin-bottom: 2px;
+}
+.analysis-card .analysis-headline {
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.analysis-card .analysis-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+.analysis-card .analysis-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid rgba(42,42,69,0.4);
+  vertical-align: top;
+}
+.analysis-card .analysis-table td:first-child {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.analysis-card .analysis-table td:nth-child(2) {
+  color: var(--accent-user);
+  font-weight: 700;
+  text-align: right;
+  min-width: 30px;
+}
+.analysis-card .analysis-table td:nth-child(3) {
+  color: var(--text-dim);
+}
+.analysis-card .analysis-prose {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(74, 144, 217, 0.15);
+}
+.analysis-card .analysis-prose p {
+  margin: 4px 0;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.analysis-card .analysis-prose strong {
+  color: var(--text);
+}
+.analysis-card .analysis-prose .waste {
+  color: #e67e22;
+}
+
 .session-status {
   display: flex;
   flex-direction: column;
@@ -2873,6 +2934,23 @@ async function checkServer() {
   return null;
 }
 
+function renderAnalysisCardHtml(a) {
+  const rows = (a.areas || []).map(area =>
+    `<tr><td>${esc(area.name)}</td><td>${area.pct}%</td><td>${esc(area.status)}</td></tr>`
+  ).join('');
+  const table = rows ? `<table class="analysis-table">${rows}</table>` : '';
+  const prose = [];
+  if (a.shipped) prose.push(`<p><strong>What shipped:</strong> ${esc(a.shipped)}</p>`);
+  if (a.waste) prose.push(`<p class="waste"><strong>Waste:</strong> ${esc(a.waste)}</p>`);
+  if (a.pattern) prose.push(`<p><strong>Pattern:</strong> ${esc(a.pattern)}</p>`);
+  const proseHtml = prose.length ? `<div class="analysis-prose">${prose.join('')}</div>` : '';
+  return `<div class="analysis-card">
+    <h3>${esc(a.title || 'Analysis')}</h3>
+    <div class="analysis-headline">${esc(a.headline || '')}</div>
+    ${table}${proseHtml}
+  </div>`;
+}
+
 function renderSessionBrowser(sessions) {
   const browser = document.getElementById('session-browser');
   const list = document.getElementById('session-list');
@@ -2963,6 +3041,21 @@ function renderSessionBrowser(sessions) {
     </div>`);
   }
 
+  // Fetch analyses and insert inline (non-blocking, progressive)
+  fetch(API_BASE + '/api/analyses', { signal: AbortSignal.timeout(3000) })
+    .then(r => r.ok ? r.json() : [])
+    .then(analyses => {
+      if (!analyses.length) return;
+      for (const a of analyses) {
+        // Insert after the day-summary-card for the analysis endDate
+        const target = list.querySelector(`.day-summary-card[data-day="${a.endDate}"]`);
+        if (target) {
+          target.insertAdjacentHTML('afterend', renderAnalysisCardHtml(a));
+        }
+      }
+    })
+    .catch(() => {});
+
   for (const dayKey of dayKeys) {
     const daySessions = byDay[dayKey];
     // Day summary card
@@ -2985,7 +3078,7 @@ function renderSessionBrowser(sessions) {
       return `<span class="session-tool-chip" style="background:${color}">${name} ${count}</span>`;
     }).join('');
 
-    html.push(`<div class="day-summary-card">
+    html.push(`<div class="day-summary-card" data-day="${dayKey}">
       <span class="day-summary-date">${dayLabel}</span>
       <div class="day-summary-stats">
         <span>${daySessions.length} sessions</span>

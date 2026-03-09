@@ -30,6 +30,7 @@ PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 
 LIVE_MODE = "--live" in sys.argv
 SCRIPT_DIR = Path(__file__).parent
 SNAPSHOTS_DIR = SCRIPT_DIR / "fix-snapshots"
+ANALYSES_DIR = SCRIPT_DIR / "analyses"
 
 # Resolve the claude binary — prefer ~/.claude/local/claude over PATH
 _local_claude = Path.home() / ".claude" / "local" / "claude"
@@ -817,6 +818,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             days = int(params.get("days", ["7"])[0])
             days = min(max(days, 1), 30)
             self.send_json(compute_report(days))
+
+        elif parsed.path == "/api/analyses":
+            analyses = []
+            if ANALYSES_DIR.exists():
+                for f in sorted(ANALYSES_DIR.glob("*.json"), reverse=True):
+                    try:
+                        analyses.append(json.loads(f.read_text()))
+                    except Exception:
+                        pass
+            self.send_json(analyses)
 
         elif parsed.path == "/api/prompt/status":
             self.send_json(ClaudeProcess.status())
