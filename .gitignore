@@ -4,3 +4,5 @@ node_modules/
 .claude-flow/
 __pycache__/
 *.pyc
+analyses/
+fix-snapshots/
