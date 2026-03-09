@@ -2944,7 +2944,7 @@ function renderAnalysisCardHtml(a) {
   if (a.waste) prose.push(`<p class="waste"><strong>Waste:</strong> ${esc(a.waste)}</p>`);
   if (a.pattern) prose.push(`<p><strong>Pattern:</strong> ${esc(a.pattern)}</p>`);
   const proseHtml = prose.length ? `<div class="analysis-prose">${prose.join('')}</div>` : '';
-  return `<div class="analysis-card">
+  return `<div class="analysis-card" data-end="${a.endDate || ''}">
     <h3>${esc(a.title || 'Analysis')}</h3>
     <div class="analysis-headline">${esc(a.headline || '')}</div>
     ${table}${proseHtml}
@@ -3042,19 +3042,37 @@ function renderSessionBrowser(sessions) {
   }
 
   // Fetch analyses and insert inline (non-blocking, progressive)
-  fetch(API_BASE + '/api/analyses', { signal: AbortSignal.timeout(3000) })
-    .then(r => r.ok ? r.json() : [])
-    .then(analyses => {
-      if (!analyses.length) return;
-      for (const a of analyses) {
-        // Insert after the day-summary-card for the analysis endDate
-        const target = list.querySelector(`.day-summary-card[data-day="${a.endDate}"]`);
-        if (target) {
-          target.insertAdjacentHTML('afterend', renderAnalysisCardHtml(a));
+  function loadAnalyses() {
+    fetch(API_BASE + '/api/analyses', { signal: AbortSignal.timeout(5000) })
+      .then(r => r.ok ? r.json() : { analyses: [], generating: [] })
+      .then(data => {
+        const analyses = data.analyses || [];
+        const generating = data.generating || [];
+        // Remove old analysis cards + generating indicators
+        list.querySelectorAll('.analysis-card, .analysis-generating').forEach(el => el.remove());
+        for (const a of analyses) {
+          const target = list.querySelector(`.day-summary-card[data-day="${a.endDate}"]`);
+          if (target) {
+            target.insertAdjacentHTML('afterend', renderAnalysisCardHtml(a));
+          }
         }
-      }
-    })
-    .catch(() => {});
+        // Show generating indicators
+        for (const key of generating) {
+          const endDate = key.split('_')[1];
+          const target = list.querySelector(`.day-summary-card[data-day="${endDate}"]`);
+          if (target && !list.querySelector(`.analysis-card[data-end="${endDate}"]`)) {
+            target.insertAdjacentHTML('afterend',
+              `<div class="analysis-generating" style="font-size:9px;color:var(--accent-user);padding:6px 14px;opacity:0.7">Generating analysis\u2026</div>`);
+          }
+        }
+        // Poll if still generating
+        if (generating.length > 0) {
+          setTimeout(loadAnalyses, 5000);
+        }
+      })
+      .catch(() => {});
+  }
+  loadAnalyses();
 
   for (const dayKey of dayKeys) {
     const daySessions = byDay[dayKey];

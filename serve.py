@@ -514,6 +514,171 @@ def compute_report(days_back):
     }
 
 
+# ── Analysis Generation ──────────────────────────────────────
+_analysis_lock = threading.Lock()
+_analysis_generating = set()  # keys currently being generated
+_analysis_semaphore = threading.Semaphore(2)  # max 2 concurrent
+
+
+def _analysis_exists(key):
+    return (ANALYSES_DIR / f"{key}.json").exists()
+
+
+def _build_analysis_prompt(day_data_list, start_date, end_date, period):
+    """Build prompt for Claude to analyze session data."""
+    lines = []
+    for d in day_data_list:
+        tools = ", ".join(f"{t[0]}:{t[1]}" for t in d.get("topTools", [])[:5])
+        msgs = []
+        for m in d.get("firstMessages", [])[:6]:
+            clean = m.replace("\n", " ").strip()[:100]
+            if clean:
+                msgs.append(clean)
+        topics = "; ".join(msgs)
+        size_mb = round(d["totalBytes"] / 1048576, 1)
+        lines.append(
+            f"  {d['date']}: {d['sessionCount']} sessions, "
+            f"{d['totalSteps']} steps, {size_mb}MB, "
+            f"{d['compactions']} compactions, "
+            f"tools=[{tools}], topics=[{topics}]"
+        )
+
+    session_block = "\n".join(lines)
+    total_sessions = sum(d["sessionCount"] for d in day_data_list)
+    total_compactions = sum(d["compactions"] for d in day_data_list)
+
+    return f"""Analyze these Claude Code sessions. {period} period: {start_date} to {end_date}.
+
+{session_block}
+
+Return ONLY valid JSON, no markdown fences:
+{{
+  "startDate": "{start_date}",
+  "endDate": "{end_date}",
+  "title": "{period} Analysis",
+  "headline": "{total_sessions} sessions summary line",
+  "areas": [{{"name": "project-area", "pct": 0, "status": "one-line assessment"}}],
+  "shipped": "what was completed or deployed",
+  "waste": "time sinks, reverts, unproductive work (empty string if none)",
+  "pattern": "behavioral observation about work patterns"
+}}
+
+Rules:
+- Derive project areas from topics (group by project name visible in paths/messages)
+- pct values must sum to 100
+- Be terse, specific, not generic. Use the actual project names and details.
+- status should characterize the outcome, not repeat the stats
+- For 1-2 session days, be brief
+- headline format: "N sessions · notable observation · notable observation"
+- waste: only flag genuine waste (reverts, abandoned work, excessive deploys). Empty string if productive.
+"""
+
+
+def _run_analysis(key, day_data_list, start_date, end_date, period):
+    """Generate an analysis via Claude CLI. Runs in background thread."""
+    if not _analysis_semaphore.acquire(timeout=60):
+        return
+    try:
+        out_path = ANALYSES_DIR / f"{key}.json"
+        if out_path.exists():
+            return
+
+        prompt = _build_analysis_prompt(day_data_list, start_date, end_date, period)
+        clean_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
+        result = subprocess.run(
+            [CLAUDE_BIN, "--print", prompt, "--output-format", "text"],
+            capture_output=True, text=True, timeout=120,
+            env=clean_env,
+        )
+
+        if result.returncode != 0 or not result.stdout.strip():
+            print(f"[analysis] Claude returned {result.returncode} for {key}")
+            return
+
+        text = result.stdout.strip()
+        # Strip markdown fences if present
+        if "```" in text:
+            parts = text.split("```")
+            text = parts[1] if len(parts) >= 3 else parts[-1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+
+        analysis = json.loads(text)
+        analysis["startDate"] = start_date
+        analysis["endDate"] = end_date
+        analysis["generatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+        ANALYSES_DIR.mkdir(exist_ok=True)
+        out_path.write_text(json.dumps(analysis, indent=2))
+        print(f"[analysis] Generated {key}")
+
+    except json.JSONDecodeError as e:
+        print(f"[analysis] JSON parse error for {key}: {e}")
+    except subprocess.TimeoutExpired:
+        print(f"[analysis] Timeout generating {key}")
+    except Exception as e:
+        print(f"[analysis] Error generating {key}: {e}")
+    finally:
+        _analysis_semaphore.release()
+        with _analysis_lock:
+            _analysis_generating.discard(key)
+
+
+def trigger_analysis_generation():
+    """Check for missing daily/weekly analyses and generate in background."""
+    report = compute_report(14)
+    days = report.get("days", [])
+    if not days:
+        return
+
+    today = time.strftime("%Y-%m-%d")
+
+    # Daily analyses (skip today — still in progress)
+    for d in days:
+        date = d["date"]
+        if date == today or d["sessionCount"] == 0:
+            continue
+        key = f"{date}_{date}"
+        with _analysis_lock:
+            if key in _analysis_generating or _analysis_exists(key):
+                continue
+            _analysis_generating.add(key)
+        threading.Thread(
+            target=_run_analysis,
+            args=(key, [d], date, date, "Daily"),
+            daemon=True,
+        ).start()
+
+    # Weekly analysis: group by ISO week, generate for complete weeks
+    from collections import defaultdict
+    weeks = defaultdict(list)
+    for d in days:
+        dt = datetime.strptime(d["date"], "%Y-%m-%d")
+        iso = dt.isocalendar()
+        week_key = f"{iso[0]}-W{iso[1]:02d}"
+        weeks[week_key].append(d)
+
+    for week_key, week_days in weeks.items():
+        week_days_sorted = sorted(week_days, key=lambda x: x["date"])
+        start = week_days_sorted[0]["date"]
+        end = week_days_sorted[-1]["date"]
+        # Only generate for weeks that ended before today
+        if end >= today:
+            continue
+        key = f"{start}_{end}"
+        with _analysis_lock:
+            if key in _analysis_generating or _analysis_exists(key):
+                continue
+            _analysis_generating.add(key)
+        threading.Thread(
+            target=_run_analysis,
+            args=(key, week_days_sorted, start, end, "Weekly"),
+            daemon=True,
+        ).start()
+
+
 # ── Fix Snapshot Tracking ─────────────────────────────────────
 # Tracks active fix sessions so we can capture before/after screenshots
 active_fixes = {}  # fix_id -> { session_id, description, before_path, after_path, status }
@@ -820,6 +985,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_json(compute_report(days))
 
         elif parsed.path == "/api/analyses":
+            # Trigger generation for missing analyses
+            trigger_analysis_generation()
+            # Return existing analyses
             analyses = []
             if ANALYSES_DIR.exists():
                 for f in sorted(ANALYSES_DIR.glob("*.json"), reverse=True):
@@ -827,7 +995,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         analyses.append(json.loads(f.read_text()))
                     except Exception:
                         pass
-            self.send_json(analyses)
+            with _analysis_lock:
+                pending = list(_analysis_generating)
+            self.send_json({
+                "analyses": analyses,
+                "generating": pending,
+            })
 
         elif parsed.path == "/api/prompt/status":
             self.send_json(ClaudeProcess.status())
