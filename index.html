@@ -2744,11 +2744,6 @@ async function checkServer() {
       serverAvailable = true;
       const sessions = await resp.json();
       renderSessionBrowser(sessions);
-      // Fetch activity report
-      try {
-        const rr = await fetch(API_BASE + '/api/report?days=7', { signal: AbortSignal.timeout(3000) });
-        if (rr.ok) renderReportCards(await rr.json());
-      } catch {}
       // Show new session bar
       document.getElementById('new-session-bar').classList.remove('hidden');
       return sessions;
@@ -2846,6 +2841,12 @@ function renderSessionBrowser(sessions) {
       else startReplay(id);
     });
   });
+
+  // Progressive load: fetch report card after sessions are rendered
+  fetch(API_BASE + '/api/report?days=7', { signal: AbortSignal.timeout(5000) })
+    .then(r => r.ok ? r.json() : null)
+    .then(report => { if (report) renderReportCards(report); })
+    .catch(() => {});
 }
 
 function showContinueInput(btn, sessionId) {
@@ -3247,14 +3248,7 @@ function wireControls(controller, renderer) {
 // Refresh button
 // ─────────────────────────────────────────────
 document.getElementById('btn-refresh')?.addEventListener('click', async () => {
-  const sessions = await checkServer();
-  if (sessions) {
-    renderSessionBrowser(sessions);
-    try {
-      const rr = await fetch(API_BASE + '/api/report?days=7', { signal: AbortSignal.timeout(3000) });
-      if (rr.ok) renderReportCards(await rr.json());
-    } catch {}
-  }
+  await checkServer();
 });
 
 // New session from landing page
