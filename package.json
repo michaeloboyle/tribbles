@@ -1,0 +1,16 @@
+{
+  "name": "tribbles",
+  "version": "1.0.0",
+  "description": "Session browser and replay visualizer for Claude Code",
+  "type": "module",
+  "scripts": {
+    "serve": "python3 serve.py",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug"
+  },
+  "devDependencies": {
+    "@cucumber/cucumber": "^9.5.1",
+    "@playwright/test": "^1.40.0"
+  }
+}
