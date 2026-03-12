@@ -1,3 +1,5 @@
+import { getToolIcon, getFileIcon } from './theme.js';
+
 export const TOOL_COLORS = {
   Read: '#27ae60', Write: '#e67e22', Edit: '#f1c40f',
   Bash: '#e74c3c', Grep: '#9b59b6', Glob: '#9b59b6',
@@ -90,7 +92,9 @@ export class GraphModel {
   addSingleToolNode(step) {
     const nodeId = `step-${step.index}`;
     const node = {
-      id: nodeId, type: `tool:${step.toolName}`, label: step.toolName,
+      id: nodeId, type: `tool:${step.toolName}`,
+      label: step.toolName, icon: getToolIcon(step.toolName),
+      toolName: step.toolName,
       sublabel: this.toolSublabel(step), color: toolColor(step.toolName),
       stepIndex: step.index, shape: 'circle', r: 18,
     };
@@ -151,6 +155,7 @@ export class GraphModel {
       if (!this.fileNodes.has(fid)) {
         const fnode = {
           id: fid, type: 'file', label: basename(fp), fullPath: fp,
+          icon: getFileIcon(fp),
           sublabel: shortenPath(fp), color: getComputedStyle(document.documentElement).getPropertyValue('--accent-file').trim() || '#74b9ff',
           stepIndex: step.index, shape: 'rect',
           readCount: 0, writeCount: 0, editCount: 0,

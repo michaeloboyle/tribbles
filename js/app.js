@@ -3,7 +3,10 @@ import { showApp } from './view.js';
 import { startLive } from './live.js';
 import { startReplay } from './replay.js';
 import { getPromptManager } from './prompt.js';
+import { initResize } from './resize.js';
 import './fix-review.js';
+
+initResize();
 
 // Refresh button
 document.getElementById('btn-refresh')?.addEventListener('click', async () => {

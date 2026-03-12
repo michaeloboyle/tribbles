@@ -30,11 +30,18 @@
         </select>
         <button id="btn-refresh" title="Refresh">Refresh</button>
       </div>
+      <div id="session-filters">
+        <button class="filter-chip active" data-filter="all">All</button>
+        <button class="filter-chip" data-filter="active">Active</button>
+        <button class="filter-chip" data-filter="today">Today</button>
+        <button class="filter-chip" data-filter="week">This Week</button>
+      </div>
       <div id="session-list"></div>
     </div>
   </div>
 </div>
 
+<div id="sidebar-resize"></div>
 <div id="app" class="hidden">
   <header id="controls">
     <div class="control-group transport">
@@ -74,7 +81,7 @@
     </div>
     <div class="control-group meta">
       <span id="session-info"></span>
-      <button id="btn-reset">Reset</button>
+      <button id="btn-reset" title="Close session">&times;</button>
     </div>
   </header>
 

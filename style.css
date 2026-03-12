@@ -111,11 +111,21 @@ body {
 /* ── App Layout ── */
 #app {
   display: grid;
-  grid-template-rows: 44px auto 1fr 28px;
+  grid-template-rows: auto 1fr 44px 28px;
+  grid-template-areas:
+    "output"
+    "main"
+    "controls"
+    "stats";
   height: 100vh;
 }
 
 #app.hidden { display: none; }
+
+#claude-output-bar { grid-area: output; }
+#main              { grid-area: main; }
+#controls          { grid-area: controls; }
+#stats-bar         { grid-area: stats; }
 
 /* ── Controls ── */
 #controls {
@@ -124,7 +134,7 @@ body {
   gap: 12px;
   padding: 0 12px;
   background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
   font-size: 12px;
 }
 
@@ -235,12 +245,13 @@ body {
 }
 
 #btn-reset {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
+  padding: 2px 6px;
+  border: 1px solid transparent;
   border-radius: 4px;
-  background: var(--bg-card);
+  background: none;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 18px;
+  line-height: 1;
   cursor: pointer;
   font-family: inherit;
   transition: all 0.15s;
@@ -248,12 +259,12 @@ body {
 
 #btn-reset:hover {
   background: var(--bg-card-active);
+  border-color: var(--border);
   color: var(--text);
 }
 
 /* ── Main Split ── */
 #main {
-  grid-row: 3;
   display: grid;
   grid-template-columns: 300px 1fr;
   overflow: hidden;
@@ -395,6 +406,7 @@ body {
   letter-spacing: 0.3px;
 }
 
+.tool-badge img { vertical-align: middle; filter: brightness(10); }
 .tool-badge.tool-read { background: var(--accent-read); }
 .tool-badge.tool-write { background: var(--accent-write); }
 .tool-badge.tool-edit { background: var(--accent-edit); color: #111; }
@@ -456,6 +468,7 @@ body {
 .edge-file-bash { stroke: var(--accent-bash); opacity: 0.4; }
 .edge-file-default { stroke: var(--text-dim); opacity: 0.4; }
 .edge-pipe { stroke: var(--accent-bash); stroke-width: 2; opacity: 0.5; stroke-dasharray: 2 2; }
+.edge-contains { stroke: var(--accent-file); stroke-width: 1; opacity: 0.25; stroke-dasharray: 3 4; }
 
 /* ── Legend ── */
 #legend {
@@ -525,7 +538,6 @@ body {
 
 /* ── Stats Bar ── */
 #stats-bar {
-  grid-row: 4;
   display: flex;
   align-items: center;
   gap: 20px;
@@ -582,6 +594,29 @@ body {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-bright);
+}
+
+#session-filters {
+  display: flex;
+  gap: 4px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.filter-chip {
+  padding: 2px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.filter-chip:hover { border-color: var(--accent-user); color: var(--text); }
+.filter-chip.active {
+  background: var(--accent-user);
+  border-color: var(--accent-user);
+  color: #fff;
 }
 
 #day-nav {
@@ -928,6 +963,11 @@ body {
   font-size: 9px;
   color: var(--text-dim);
 }
+.session-elapsed {
+  font-size: 8px;
+  color: var(--accent-read);
+  opacity: 0.8;
+}
 
 .session-info {
   min-width: 0;
@@ -1116,12 +1156,14 @@ body {
 /* ── Claude Output Bar (interactive response) ── */
 #claude-output-bar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 4px 12px;
   background: var(--accent-bash-10);
   border-bottom: 1px solid var(--accent-bash);
   font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 #claude-output-bar.hidden {
@@ -1196,6 +1238,73 @@ body {
   font-size: 11px;
   font-family: inherit;
   cursor: pointer;
+}
+
+/* ── Sidebar layout (when app is open) ── */
+body:has(#landing.sidebar) {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#landing.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: var(--sidebar-width, 300px);
+  min-width: 200px;
+  max-width: 600px;
+  height: 100vh;
+  overflow-y: auto;
+  border-right: none;
+  background: var(--bg-panel);
+}
+
+#landing.sidebar #landing-inner {
+  padding: 12px 0;
+  gap: 12px;
+  max-height: none;
+  height: 100%;
+  overflow-y: auto;
+}
+
+#landing.sidebar #session-browser,
+#landing.sidebar #new-session-bar {
+  max-width: none;
+  width: 100%;
+  padding: 0 12px;
+}
+
+#landing.sidebar #browser-header {
+  height: auto;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+body:has(#landing.sidebar) #app {
+  flex: 1;
+  min-width: 0;
+  height: 100vh;
+}
+
+/* ── Resize Handle ── */
+#sidebar-resize {
+  display: none;
+}
+
+body:has(#landing.sidebar) #sidebar-resize {
+  display: block;
+  width: 4px;
+  cursor: col-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+body:has(#landing.sidebar) #sidebar-resize:hover,
+#sidebar-resize.dragging {
+  background: var(--accent-user);
 }
 
 /* ── Responsive ── */

@@ -12,7 +12,7 @@ export function showTooltip(event, d) {
     html = `<div class="tt-title">${esc(d.label)}</div>
       <div class="tt-detail" style="font-family:monospace">${esc(d.fullCommand || '')}</div>`;
   } else if (d.type.startsWith('tool:')) {
-    html = `<div class="tt-title">${esc(d.label)}</div>
+    html = `<div class="tt-title">${esc(d.toolName || d.label)}</div>
       <div class="tt-detail">${esc(d.sublabel || '')}</div>`;
   }
   tooltip.innerHTML = html;

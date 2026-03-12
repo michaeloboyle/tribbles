@@ -1,5 +1,6 @@
 import { esc, trunc, openFile } from './utils.js';
 import { basename } from './graph.js';
+import { getToolIcon, isDataUri } from './theme.js';
 
 export default class MessageLog {
   constructor(container) {
@@ -31,7 +32,7 @@ export default class MessageLog {
       case 'tool_use':
         div.innerHTML = `
           <div class="msg-header">
-            <span class="tool-badge tool-${step.toolName.toLowerCase()}">${step.toolName}</span>
+            <span class="tool-badge tool-${step.toolName.toLowerCase()}" title="${step.toolName}">${isDataUri(getToolIcon(step.toolName)) ? `<img src="${getToolIcon(step.toolName)}" width="14" height="14" alt="${step.toolName}">` : getToolIcon(step.toolName)}</span>
             ${step.timestamp ? `<span class="msg-time">${this.fmtTime(step.timestamp)}</span>` : ''}</div>
           <div class="msg-body"><code>${this.fmtToolInput(step)}</code></div>`;
         break;

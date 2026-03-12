@@ -1,5 +1,6 @@
 import { showTooltip, moveTooltip, hideTooltip } from './tooltip.js';
 import { openFile } from './utils.js';
+import { isDataUri } from './theme.js';
 
 export default class GraphRenderer {
   constructor(svgElement) {
@@ -60,7 +61,7 @@ export default class GraphRenderer {
           .force('link', d3.forceLink().id(d => d.id).distance(d => d.type === 'flow' ? 60 : 100).strength(0.4))
           .force('charge', d3.forceManyBody().strength(-250).distanceMax(400))
           .force('center', d3.forceCenter(this.width / 2, this.height / 2).strength(0.05))
-          .force('collision', d3.forceCollide().radius(d => d.shape === 'rect' ? 50 : 25))
+          .force('collision', d3.forceCollide().radius(d => d.shape === 'rect' ? 60 : 25))
           .force('x', d3.forceX(this.width / 2).strength(0.03))
           .force('y', d3.forceY(this.height / 2).strength(0.03))
           .alphaDecay(0.015)
@@ -105,7 +106,8 @@ export default class GraphRenderer {
     const edgeSel = this.edgeGroup.selectAll('.edge-line')
       .data(edges, d => `${typeof d.source === 'object' ? d.source.id : d.source}-${typeof d.target === 'object' ? d.target.id : d.target}-${d.stepIndex}`);
 
-    edgeSel.exit().transition().duration(200).attr('opacity', 0).remove();
+    edgeSel.exit().classed('exiting', true)
+      .transition().duration(200).attr('opacity', 0).remove();
 
     const edgeEnter = edgeSel.enter().append('line')
       .attr('class', d => `edge-line ${d.edgeClass}`)
@@ -123,7 +125,8 @@ export default class GraphRenderer {
     const nodeSel = this.nodeGroup.selectAll('.node-group')
       .data(nodes, d => d.id);
 
-    nodeSel.exit().transition().duration(200).attr('opacity', 0).remove();
+    nodeSel.exit().classed('exiting', true)
+      .transition().duration(200).attr('opacity', 0).remove();
 
     let dragMoved = false;
     const nodeEnter = nodeSel.enter().append('g')
@@ -149,16 +152,32 @@ export default class GraphRenderer {
         // File node
         g.append('rect')
           .attr('class', 'node-shape')
-          .attr('width', 100).attr('height', 26)
-          .attr('x', -50).attr('y', -13)
+          .attr('width', 120).attr('height', 26)
+          .attr('x', -60).attr('y', -13)
           .attr('rx', 5).attr('ry', 5)
           .attr('fill', d.color)
           .attr('fill-opacity', 0.15)
           .attr('stroke', d.color)
           .attr('stroke-width', 1.5);
+        if (d.icon && isDataUri(d.icon)) {
+          g.append('image')
+            .attr('href', d.icon)
+            .attr('width', 14).attr('height', 14)
+            .attr('x', -55).attr('y', -7);
+        } else if (d.icon) {
+          g.append('text').attr('class', 'node-label')
+            .attr('x', -53).attr('dy', 1)
+            .style('text-anchor', 'start')
+            .attr('font-size', '11px')
+            .text(d.icon);
+        }
+        const hasIcon = !!d.icon;
+        const labelX = hasIcon ? -38 : -53;
+        const maxChars = hasIcon ? 16 : 18;
         g.append('text').attr('class', 'node-label')
-          .attr('dy', 1)
-          .text(d.label.length > 14 ? d.label.slice(0, 13) + '\u2026' : d.label);
+          .attr('x', labelX).attr('dy', 1)
+          .style('text-anchor', 'start')
+          .text(d.label.length > maxChars ? d.label.slice(0, maxChars - 1) + '\u2026' : d.label);
       } else if (d.shape === 'hexagon') {
         // Bash sub-command node (hexagon)
         const r = d.r || 16;
@@ -192,9 +211,20 @@ export default class GraphRenderer {
           .attr('fill-opacity', 0.2)
           .attr('stroke', d.color)
           .attr('stroke-width', 2);
-        g.append('text').attr('class', 'node-label')
-          .attr('dy', 0.5)
-          .text(d.label.length > 6 ? d.label.slice(0, 5) : d.label);
+        if (d.icon && isDataUri(d.icon)) {
+          const sz = (d.r || 18) * 0.9;
+          g.append('image')
+            .attr('href', d.icon)
+            .attr('width', sz).attr('height', sz)
+            .attr('x', -sz / 2).attr('y', -sz / 2);
+        } else {
+          const lbl = d.icon || d.label;
+          const isEmoji = /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u.test(lbl) || lbl.length <= 2;
+          g.append('text').attr('class', 'node-label')
+            .attr('dy', isEmoji ? 1 : 0.5)
+            .attr('font-size', isEmoji ? '14px' : null)
+            .text(isEmoji ? lbl : (lbl.length > 6 ? lbl.slice(0, 5) : lbl));
+        }
         if (d.sublabel) {
           g.append('text').attr('class', 'node-sublabel')
             .attr('dy', (d.r || 18) + 12)
@@ -308,15 +338,23 @@ export default class GraphRenderer {
       this.simulation.stop();
     }
 
-    // Gather current nodes from the data bound to the DOM
+    // Interrupt all running transitions so exit .remove() callbacks don't fire late
+    this.nodeGroup.selectAll('.node-group').interrupt();
+    this.edgeGroup.selectAll('.edge-line').interrupt();
+
+    // Remove elements that were mid-exit-transition (marked with .exiting class)
+    this.nodeGroup.selectAll('.node-group.exiting').remove();
+    this.edgeGroup.selectAll('.edge-line.exiting').remove();
+
+    // Re-select from DOM to get a fresh, accurate selection
+    this.nodeElements = this.nodeGroup.selectAll('.node-group');
+    this.edgeElements = this.edgeGroup.selectAll('.edge-line');
+
+    // Gather current data from the live DOM elements
     const nodes = [];
-    if (this.nodeElements) {
-      this.nodeElements.each(function(d) { nodes.push(d); });
-    }
+    this.nodeElements.each(function(d) { if (d) nodes.push(d); });
     const edges = [];
-    if (this.edgeElements) {
-      this.edgeElements.each(function(d) { edges.push(d); });
-    }
+    this.edgeElements.each(function(d) { if (d) edges.push(d); });
 
     if (nodes.length === 0) return;
 
@@ -326,7 +364,7 @@ export default class GraphRenderer {
         .force('link', d3.forceLink(edges).id(d => d.id).distance(d => d.type === 'flow' ? 60 : 100).strength(0.4))
         .force('charge', d3.forceManyBody().strength(-250).distanceMax(400))
         .force('center', d3.forceCenter(this.width / 2, this.height / 2).strength(0.05))
-        .force('collision', d3.forceCollide().radius(d => d.shape === 'rect' ? 50 : 25))
+        .force('collision', d3.forceCollide().radius(d => d.shape === 'rect' ? 60 : 25))
         .force('x', d3.forceX(this.width / 2).strength(0.03))
         .force('y', d3.forceY(this.height / 2).strength(0.03))
         .alphaDecay(0.015)
@@ -508,8 +546,8 @@ export default class GraphRenderer {
   }
 
   clear() {
-    this.edgeGroup.selectAll('*').remove();
-    this.nodeGroup.selectAll('*').remove();
+    this.edgeGroup.selectAll('*').interrupt().remove();
+    this.nodeGroup.selectAll('*').interrupt().remove();
     this.edgeElements = null;
     this.nodeElements = null;
     if (this.simulation) {

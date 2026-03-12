@@ -126,14 +126,25 @@ function renderDayHtml(dayKey, daySessions) {
     }).join('');
 
     const startDate = s.startTime ? new Date(s.startTime) : null;
+    const endDate = s.endTime ? new Date(s.endTime) : null;
     const dateStr = startDate ? startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
     const timeStr = startDate ? startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
+
+    // Elapsed duration for active sessions
+    let activeAge = '';
+    if (isActive && startDate) {
+      const ms = Date.now() - startDate.getTime();
+      const h = Math.floor(ms / 3600000);
+      const d = Math.floor(h / 24);
+      activeAge = d > 0 ? `${d}d ${h % 24}h` : h > 0 ? `${h}h` : `${Math.floor(ms / 60000)}m`;
+    }
 
     out += `
       <div class="session-card ${isActive ? 'active-session' : ''}" data-id="${s.id}">
         <div class="session-status">
           ${isActive ? '<span class="live-dot"></span>' : '<span style="color:var(--text-dim);font-size:10px">' + dateStr + '</span>'}
           <span class="session-age">${isActive ? 'LIVE' : s.modifiedAgo}</span>
+          ${isActive && activeAge ? `<span class="session-elapsed">${activeAge}</span>` : ''}
         </div>
         <div class="session-info">
           <div class="session-msg">${esc(s.firstMessage)}</div>
@@ -155,6 +166,53 @@ function renderDayHtml(dayKey, daySessions) {
   return out;
 }
 
+let activeFilter = 'all';
+let allSessions = [];
+
+function groupByDay(sessions) {
+  const byDay = {};
+  for (const s of sessions) {
+    // Group by last activity (endTime), not start time
+    const ts = s.endTime || s.startTime;
+    const dayKey = ts ? new Date(ts).toLocaleDateString('en-CA') : 'unknown';
+    (byDay[dayKey] ??= []).push(s);
+  }
+  // Sort within each day: active first, then by last activity descending
+  for (const day of Object.values(byDay)) {
+    day.sort((a, b) => {
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      const aEnd = a.endTime ? new Date(a.endTime).getTime() : 0;
+      const bEnd = b.endTime ? new Date(b.endTime).getTime() : 0;
+      return bEnd - aEnd;
+    });
+  }
+  return byDay;
+}
+
+function applyFilter(sessions, filter) {
+  const now = Date.now();
+  switch (filter) {
+    case 'active':
+      return sessions.filter(s => s.active);
+    case 'today': {
+      const todayKey = new Date().toLocaleDateString('en-CA');
+      return sessions.filter(s => {
+        const ts = s.endTime || s.startTime;
+        return ts && new Date(ts).toLocaleDateString('en-CA') === todayKey;
+      });
+    }
+    case 'week': {
+      const weekAgo = now - 7 * 86400000;
+      return sessions.filter(s => {
+        const ts = s.endTime || s.startTime;
+        return ts && new Date(ts).getTime() >= weekAgo;
+      });
+    }
+    default:
+      return sessions;
+  }
+}
+
 export function renderSessionBrowser(sessions) {
   const browser = document.getElementById('session-browser');
   const list = document.getElementById('session-list');
@@ -165,86 +223,7 @@ export function renderSessionBrowser(sessions) {
     return;
   }
 
-  // Group sessions by day (using startTime or endTime)
-  const byDay = {};
-  for (const s of sessions) {
-    const ts = s.startTime || s.endTime;
-    const dayKey = ts ? new Date(ts).toLocaleDateString('en-CA') : 'unknown'; // YYYY-MM-DD
-    (byDay[dayKey] ??= []).push(s);
-  }
-  const dayKeys = Object.keys(byDay).sort().reverse();
-
-  // Weekly analysis card (last 7 days only)
-  const html = [];
-  const weekDayKeys = dayKeys.slice(0, 7);
-  const weekSessions = weekDayKeys.flatMap(dk => byDay[dk]);
-  if (weekDayKeys.length >= 2) {
-    const allSteps = weekSessions.reduce((a, s) => a + (s.stepEstimate || 0), 0);
-    const allBytes = weekSessions.reduce((a, s) => a + (s.sizeBytes || 0), 0);
-    const allCompactions = weekSessions.filter(s => (s.sizeBytes || 0) > 5_000_000).length;
-    const allToolTotals = {};
-    const projectTotals = {};
-    for (const s of weekSessions) {
-      for (const [tool, count] of Object.entries(s.toolCounts || {})) {
-        allToolTotals[tool] = (allToolTotals[tool] || 0) + count;
-      }
-      const proj = s.project || 'unknown';
-      projectTotals[proj] = (projectTotals[proj] || 0) + 1;
-    }
-    const topToolsAll = Object.entries(allToolTotals).sort((a, b) => b[1] - a[1]).slice(0, 5);
-    const sizeMBAll = (allBytes / 1048576).toFixed(0);
-    const avgPerDay = (weekSessions.length / weekDayKeys.length).toFixed(1);
-    const firstDay = new Date(weekDayKeys[weekDayKeys.length - 1] + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    const lastDay = new Date(weekDayKeys[0] + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-
-    // Project area breakdown by steps
-    const projSteps = {};
-    for (const s of weekSessions) {
-      const proj = (s.project || 'unknown').split('/').pop();
-      projSteps[proj] = (projSteps[proj] || 0) + (s.stepEstimate || 0);
-    }
-    const projBySteps = Object.entries(projSteps).sort((a, b) => b[1] - a[1]);
-    const projRows = projBySteps.slice(0, 6).map(([p, steps]) => {
-      const pct = allSteps > 0 ? Math.round((steps / allSteps) * 100) : 0;
-      const count = projectTotals[Object.keys(projectTotals).find(k => k.split('/').pop() === p)] || 0;
-      return `<div class="analysis-area-row">
-        <span class="analysis-area-bar" style="width:${Math.max(pct, 2)}%"></span>
-        <span class="analysis-area-name">${esc(p)}</span>
-        <span class="analysis-area-pct">${pct}%</span>
-        <span class="analysis-area-detail">${count} sessions \u00b7 ${steps.toLocaleString()} steps</span>
-      </div>`;
-    }).join('');
-
-    // Waste signals
-    const warnings = [];
-    if (allCompactions > 0) warnings.push(`${allCompactions} compactions \u2014 sessions run to exhaustion`);
-    const uniqueProjects = Object.keys(projSteps).length;
-    if (uniqueProjects > 5) warnings.push(`${uniqueProjects} project areas \u2014 high context switching`);
-    const busiestDay = weekDayKeys.reduce((best, dk) => byDay[dk].length > (byDay[best]?.length || 0) ? dk : best, weekDayKeys[0]);
-    const quietestDay = weekDayKeys.reduce((best, dk) => byDay[dk].length < (byDay[best]?.length || Infinity) ? dk : best, weekDayKeys[0]);
-    if (byDay[busiestDay].length > byDay[quietestDay].length * 3) {
-      warnings.push(`Uneven load: ${byDay[busiestDay].length} sessions on busiest day vs ${byDay[quietestDay].length} on quietest`);
-    }
-    const warningHtml = warnings.length > 0
-      ? `<div class="analysis-warnings">${warnings.map(w => `<div class="analysis-warning">${esc(w)}</div>`).join('')}</div>`
-      : '';
-
-    const toolLine = topToolsAll.map(([n, c]) => `${n} ${c}`).join(' \u00b7 ');
-
-    html.push(`<div class="week-analysis-card">
-      <h3>${firstDay} \u2013 ${lastDay} \u00b7 ${weekDayKeys.length} days</h3>
-      <div class="week-analysis-grid">
-        <div class="week-analysis-stat"><div class="val">${weekSessions.length}</div><div class="label">sessions</div></div>
-        <div class="week-analysis-stat"><div class="val">${avgPerDay}</div><div class="label">avg / day</div></div>
-        <div class="week-analysis-stat"><div class="val">${allSteps.toLocaleString()}</div><div class="label">steps</div></div>
-        <div class="week-analysis-stat"><div class="val">${sizeMBAll}</div><div class="label">MB context</div></div>
-        <div class="week-analysis-stat"><div class="val">${allCompactions}</div><div class="label">compactions</div></div>
-      </div>
-      <div class="analysis-areas">${projRows}</div>
-      <div style="color:var(--text-dim);margin-top:6px;font-size:9px">Top tools: ${esc(toolLine)}</div>
-      ${warningHtml}
-    </div>`);
-  }
+  allSessions = sessions;
 
   // Fetch analyses and insert inline (non-blocking, progressive)
   function loadAnalyses() {
@@ -253,7 +232,6 @@ export function renderSessionBrowser(sessions) {
       .then(data => {
         const analyses = data.analyses || [];
         const generating = data.generating || [];
-        // Remove old analysis cards + generating indicators
         list.querySelectorAll('.analysis-card, .analysis-generating').forEach(el => el.remove());
         for (const a of analyses) {
           const target = list.querySelector(`.day-summary-card[data-day="${a.endDate}"]`);
@@ -261,7 +239,6 @@ export function renderSessionBrowser(sessions) {
             target.insertAdjacentHTML('afterend', renderAnalysisCardHtml(a));
           }
         }
-        // Show generating indicators
         for (const key of generating) {
           const endDate = key.split('_')[1];
           const target = list.querySelector(`.day-summary-card[data-day="${endDate}"]`);
@@ -270,23 +247,52 @@ export function renderSessionBrowser(sessions) {
               `<div class="analysis-generating" style="font-size:9px;color:var(--accent-user);padding:6px 14px;opacity:0.7">Generating analysis\u2026</div>`);
           }
         }
-        // Poll if still generating
         if (generating.length > 0) {
           setTimeout(loadAnalyses, 5000);
         }
       })
       .catch(() => {});
   }
-  // Cache week HTML and store state
-  paginationState = { byDay, dayKeys, currentIdx: 0, weekHtml: html.join(''), list, loadAnalyses };
 
-  // Render day 0
-  renderCurrentDay();
+  function rebuildForFilter() {
+    const filtered = applyFilter(allSessions, activeFilter);
+    const byDay = groupByDay(filtered);
+    const dayKeys = Object.keys(byDay).sort().reverse();
+
+    if (dayKeys.length === 0) {
+      list.innerHTML = `<div style="color:var(--text-dim);padding:20px;text-align:center">No ${activeFilter} sessions</div>`;
+      document.getElementById('day-nav').style.display = 'none';
+      return;
+    }
+
+    document.getElementById('day-nav').style.display = activeFilter === 'all' ? '' : 'none';
+    paginationState = { byDay, dayKeys, currentIdx: 0, weekHtml: '', list, loadAnalyses };
+    if (activeFilter === 'all') {
+      renderCurrentDay();
+    } else {
+      // Show all matching days at once (no pagination)
+      list.innerHTML = dayKeys.map(dk => renderDayHtml(dk, byDay[dk])).join('');
+      loadAnalyses();
+    }
+  }
+
+  paginationState = { byDay: {}, dayKeys: [], currentIdx: 0, weekHtml: '', list, loadAnalyses };
+  rebuildForFilter();
 
   // Abort previous listeners on re-render (Refresh)
   if (listClickController) listClickController.abort();
   listClickController = new AbortController();
   const sig = listClickController.signal;
+
+  // Filter chips
+  document.querySelectorAll('#session-filters .filter-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('#session-filters .filter-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      activeFilter = chip.dataset.filter;
+      rebuildForFilter();
+    }, { signal: sig });
+  });
 
   // Delegated click: session cards + buttons
   list.addEventListener('click', (e) => {
