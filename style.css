@@ -1317,6 +1317,24 @@ body:has(#landing.sidebar) #sidebar-resize:hover,
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
+
+  /* Collapse sidebar on tablet/mobile when graph is visible */
+  body:has(#landing.sidebar) #landing.sidebar {
+    width: 250px;
+    min-width: 180px;
+  }
+
+  body:has(#landing.sidebar) #app {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* Hide session browser on very small screens unless in split mode */
+  @media (max-width: 600px) {
+    body:has(#landing.sidebar):not(:has(#app[data-view-mode="split"])) #landing.sidebar {
+      display: none;
+    }
+  }
 }
 
 /* ── Fix Review Panel ── */

@@ -46,8 +46,16 @@ export function initializeApp(session) {
   document.getElementById('session-info').textContent =
     `${session.model || 'unknown'} \u00B7 ${session.version || ''} \u00B7 ${session.steps.length} steps`;
 
+  // Clear previous graph completely before creating new renderer
+  const svgElement = document.getElementById('graph');
+  svgElement.innerHTML = ''; // Clear all children
+
+  // Reset zoom display
+  const zoomDisplay = document.getElementById('zoom-level');
+  if (zoomDisplay) zoomDisplay.textContent = '100%';
+
   const graphModel = new GraphModel();
-  const renderer = new GraphRenderer(document.getElementById('graph'));
+  const renderer = new GraphRenderer(svgElement);
   const messageLog = new MessageLog(document.getElementById('messages-container'));
   const controller = new AnimationController(session, graphModel, renderer, messageLog);
 
