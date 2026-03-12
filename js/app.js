@@ -31,6 +31,39 @@ document.getElementById('new-session-input')?.addEventListener('keydown', (e) =>
   }
 });
 
+// View mode switcher
+const viewModeSelect = document.getElementById('view-mode-select');
+if (viewModeSelect) {
+  viewModeSelect.addEventListener('change', (e) => {
+    const mode = e.target.value;
+    const app = document.getElementById('app');
+    if (app) {
+      app.setAttribute('data-view-mode', mode);
+      localStorage.setItem('tribbles-view-mode', mode);
+    }
+  });
+
+  // Restore saved view mode
+  const savedMode = localStorage.getItem('tribbles-view-mode') || 'split';
+  viewModeSelect.value = savedMode;
+}
+
+// Zoom controls
+document.getElementById('btn-zoom-in')?.addEventListener('click', () => {
+  const ctrl = window.appController;
+  if (ctrl?.renderer) ctrl.renderer.zoomIn();
+});
+
+document.getElementById('btn-zoom-out')?.addEventListener('click', () => {
+  const ctrl = window.appController;
+  if (ctrl?.renderer) ctrl.renderer.zoomOut();
+});
+
+document.getElementById('btn-zoom-fit')?.addEventListener('click', () => {
+  const ctrl = window.appController;
+  if (ctrl?.renderer) ctrl.renderer.zoomFit();
+});
+
 // Re-render graph when theme changes
 document.addEventListener('tribbles-theme-change', () => {
   const ctrl = window.appController;

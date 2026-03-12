@@ -53,6 +53,8 @@ export default class GraphRenderer {
 
   render(nodes, edges, currentStep) {
     this.currentStep = currentStep;
+    this.nodes = nodes;
+    this.edges = edges;
 
     if (this.currentLayout === 'force') {
       // Update simulation
@@ -302,6 +304,7 @@ export default class GraphRenderer {
         el.attr('opacity', d.stepIndex === step ? 0.8 : 0.25);
       });
     }
+    this.updateZoomDisplay();
   }
 
   tick() {
@@ -554,5 +557,61 @@ export default class GraphRenderer {
       this.simulation.stop();
       this.simulation = null;
     }
+  }
+
+  // Zoom control methods
+  getZoomLevel() {
+    const transform = d3.zoomTransform(this.svg.node());
+    return Math.round(transform.k * 100);
+  }
+
+  updateZoomDisplay() {
+    const level = this.getZoomLevel();
+    const display = document.getElementById('zoom-level');
+    if (display) display.textContent = level + '%';
+  }
+
+  zoomIn() {
+    const transform = d3.zoomTransform(this.svg.node());
+    const newScale = Math.min(5, transform.k * 1.2);
+    this.svg.transition().duration(250)
+      .call(this.zoom.scaleTo, newScale);
+    this.updateZoomDisplay();
+  }
+
+  zoomOut() {
+    const transform = d3.zoomTransform(this.svg.node());
+    const newScale = Math.max(0.1, transform.k / 1.2);
+    this.svg.transition().duration(250)
+      .call(this.zoom.scaleTo, newScale);
+    this.updateZoomDisplay();
+  }
+
+  zoomFit() {
+    if (this.nodes && this.nodes.length === 0) return;
+
+    const padding = 40;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+
+    for (const node of this.nodes) {
+      const r = node.type === 'file' ? 8 : 6;
+      minX = Math.min(minX, node.x - r);
+      maxX = Math.max(maxX, node.x + r);
+      minY = Math.min(minY, node.y - r);
+      maxY = Math.max(maxY, node.y + r);
+    }
+
+    if (!isFinite(minX)) return; // No nodes
+
+    const boundingWidth = maxX - minX + padding * 2;
+    const boundingHeight = maxY - minY + padding * 2;
+
+    const scale = Math.min(this.width / boundingWidth, this.height / boundingHeight);
+    const tx = this.width / 2 - (minX + boundingWidth / 2) * scale;
+    const ty = this.height / 2 - (minY + boundingHeight / 2) * scale;
+
+    this.svg.transition().duration(500)
+      .call(this.zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+    this.updateZoomDisplay();
   }
 }

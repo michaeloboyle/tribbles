@@ -56,6 +56,20 @@
       <input type="range" id="speed-slider" min="50" max="2000" value="600" step="50">
       <span id="speed-label">600ms</span>
     </div>
+    <div class="control-group zoom" id="zoom-group">
+      <button id="btn-zoom-out" title="Zoom out (-)">−</button>
+      <span id="zoom-level">100%</span>
+      <button id="btn-zoom-in" title="Zoom in (+)">+</button>
+      <button id="btn-zoom-fit" title="Fit to screen">Fit</button>
+    </div>
+    <div class="control-group view-mode" id="view-mode-group">
+      <label>View</label>
+      <select id="view-mode-select" title="Switch between Graph, Activity Log, and Split view (helpful on mobile)">
+        <option value="split">Split</option>
+        <option value="graph">Graph</option>
+        <option value="log">Activity Log</option>
+      </select>
+    </div>
     <div class="control-group layout">
       <label>Layout</label>
       <select id="layout-select">

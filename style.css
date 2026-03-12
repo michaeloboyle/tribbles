@@ -1425,4 +1425,82 @@ body:has(#landing.sidebar) #sidebar-resize:hover,
   transition: all 0.15s;
 }
 #fix-review-badge:hover { transform: scale(1.05); }
+
+/* ── View Mode Control ── */
+#view-mode-select {
+  min-width: 80px;
+}
+
+/* View mode: split (default) */
+#app[data-view-mode="split"] #message-log { display: flex; }
+#app[data-view-mode="split"] #graph-container { display: block; }
+#app[data-view-mode="split"] #main {
+  grid-template-columns: 300px 1fr;
+}
+
+/* View mode: graph only */
+#app[data-view-mode="graph"] #message-log { display: none; }
+#app[data-view-mode="graph"] #graph-container { display: block; }
+#app[data-view-mode="graph"] #main {
+  grid-template-columns: 1fr;
+}
+
+/* View mode: log only */
+#app[data-view-mode="log"] #message-log { display: flex; }
+#app[data-view-mode="log"] #graph-container { display: none; }
+#app[data-view-mode="log"] #main {
+  grid-template-columns: 1fr;
+}
+#app[data-view-mode="log"] #message-log {
+  border-right: none;
+}
+
+/* Mobile: default to graph-only view */
+@media (max-width: 900px) {
+  #app:not([data-view-mode]) #message-log { display: none; }
+  #app:not([data-view-mode]) #main { grid-template-columns: 1fr; }
+}
+
+/* ── Zoom Controls ── */
+.control-group.zoom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.control-group.zoom button {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.15s;
+  font-family: monospace;
+}
+
+.control-group.zoom button:hover {
+  background: var(--bg-card-active);
+  border-color: var(--accent-user);
+}
+
+.control-group.zoom button:active {
+  transform: scale(0.95);
+}
+
+#zoom-level {
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 40px;
+  text-align: center;
+}
+
+/* Hide zoom controls on desktop if not needed */
+@media (min-width: 1200px) {
+  #zoom-group { opacity: 0.6; }
+}
 #fix-review-badge.has-fixes { display: block; }
