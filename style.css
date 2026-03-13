@@ -1031,6 +1031,9 @@ body {
   display: flex;
   gap: 3px;
   margin-top: 3px;
+  flex-wrap: wrap;
+  max-width: 400px;
+  overflow: hidden;
 }
 
 .session-tool-chip {
