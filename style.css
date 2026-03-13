@@ -1209,6 +1209,11 @@ body {
   color: #fff;
 }
 
+/* Hide action buttons when continue input is open (card is "expanded") */
+.session-card:has(.session-continue-input) .session-actions {
+  display: none;
+}
+
 .session-continue-input {
   display: flex;
   gap: 6px;
