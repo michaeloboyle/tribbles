@@ -30,6 +30,9 @@ PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 
 LIVE_MODE = "--live" in sys.argv
 SCRIPT_DIR = Path(__file__).parent
 SNAPSHOTS_DIR = SCRIPT_DIR / "fix-snapshots"
+QUEUE_FILE = SCRIPT_DIR / "fix-queue.json"
+APPROVAL_HISTORY_FILE = SCRIPT_DIR / "fix-approval-history.json"
+WEBHOOK_CONFIG_FILE = SCRIPT_DIR / "fix-webhook.json"
 ANALYSES_DIR = SCRIPT_DIR / "analyses"
 
 # Resolve the claude binary — prefer ~/.claude/local/claude over PATH
@@ -681,7 +684,196 @@ def trigger_analysis_generation():
 
 # ── Fix Snapshot Tracking ─────────────────────────────────────
 # Tracks active fix sessions so we can capture before/after screenshots
-active_fixes = {}  # fix_id -> { session_id, description, before_path, after_path, status }
+# fix_id -> { session_id, description, issue_class, confidence, before_path,
+#             after_path, status, created_at, resolved_at, outcome,
+#             changed_files, diffs, auto_applied }
+_fixes_lock = threading.Lock()
+
+
+def _load_queue():
+    """Load the persistent fix queue from disk."""
+    if QUEUE_FILE.exists():
+        try:
+            with open(QUEUE_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_queue():
+    """Persist the current fix queue to disk (call while holding _fixes_lock)."""
+    try:
+        with open(QUEUE_FILE, "w") as f:
+            json.dump(active_fixes, f, indent=2, default=str)
+    except Exception as e:
+        print(f"[queue] save error: {e}")
+
+
+def _load_approval_history():
+    """Load per-class approval history from disk."""
+    if APPROVAL_HISTORY_FILE.exists():
+        try:
+            with open(APPROVAL_HISTORY_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_approval_history():
+    """Persist approval history to disk (call while holding _fixes_lock)."""
+    try:
+        with open(APPROVAL_HISTORY_FILE, "w") as f:
+            json.dump(approval_history, f, indent=2, default=str)
+    except Exception as e:
+        print(f"[approval] save error: {e}")
+
+
+def _load_webhook_config():
+    """Load webhook configuration from disk."""
+    if WEBHOOK_CONFIG_FILE.exists():
+        try:
+            with open(WEBHOOK_CONFIG_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"url": None, "sound": False}
+
+
+active_fixes = _load_queue()
+approval_history = _load_approval_history()
+webhook_config = _load_webhook_config()
+
+# Confidence threshold above which a fix can be auto-applied (configurable)
+CONFIDENCE_AUTO_APPLY_THRESHOLD = 0.9
+# Minimum number of fixes needed before graduation is considered
+GRADUATION_MIN_FIXES = 10
+# Approval rate required for graduation
+GRADUATION_MIN_RATE = 0.95
+
+
+def compute_confidence(issue_class):
+    """Compute a confidence score (0–1) for a fix based on class history.
+
+    - Classes with many approvals and high approval rate → high confidence
+    - Novel or frequently-rejected classes → low confidence
+    """
+    if not issue_class:
+        return 0.3  # novel/unknown class — low confidence
+    stats = approval_history.get(issue_class)
+    if not stats or stats.get("total", 0) < 3:
+        return 0.4  # too few samples
+    total = stats["total"]
+    approved = stats.get("approved", 0)
+    partial = stats.get("partial", 0)
+    # Weight partial approvals at 0.5
+    rate = (approved + 0.5 * partial) / total
+    # Scale: 0.4 at 0% approval → 1.0 at 100% approval
+    return round(0.4 + 0.6 * rate, 3)
+
+
+def check_graduation(issue_class):
+    """Check if a class should be graduated to autonomous.
+
+    Returns (should_graduate, current_rate, total) tuple.
+    """
+    if not issue_class:
+        return False, 0.0, 0
+    stats = approval_history.get(issue_class, {})
+    total = stats.get("total", 0)
+    if total < GRADUATION_MIN_FIXES:
+        return False, 0.0, total
+    approved = stats.get("approved", 0)
+    partial = stats.get("partial", 0)
+    rate = (approved + 0.5 * partial) / total
+    return rate >= GRADUATION_MIN_RATE, round(rate, 3), total
+
+
+def parse_session_diffs(session_id):
+    """Parse a Claude session JSONL for Edit and Write tool calls.
+
+    Returns a list of diff entries:
+    [{ "tool": "Edit"|"Write", "file_path": str, "old_string": str,
+       "new_string": str, "unified_diff": str }, ...]
+    """
+    import difflib
+    pattern = str(CLAUDE_DIR / "*" / f"{session_id}.jsonl")
+    matches = globmod.glob(pattern)
+    if not matches:
+        return []
+
+    diffs = []
+    try:
+        with open(matches[0]) as f:
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") != "assistant":
+                    continue
+                for block in entry.get("message", {}).get("content", []):
+                    if block.get("type") != "tool_use":
+                        continue
+                    name = block.get("name", "")
+                    inp = block.get("input", {})
+                    if name == "Edit" and inp.get("file_path"):
+                        old = inp.get("old_string", "")
+                        new = inp.get("new_string", "")
+                        udiff = "".join(difflib.unified_diff(
+                            old.splitlines(keepends=True),
+                            new.splitlines(keepends=True),
+                            fromfile=f"a/{inp['file_path']}",
+                            tofile=f"b/{inp['file_path']}",
+                        ))
+                        diffs.append({
+                            "tool": "Edit",
+                            "file_path": inp["file_path"],
+                            "old_string": old,
+                            "new_string": new,
+                            "unified_diff": udiff,
+                        })
+                    elif name == "Write" and inp.get("file_path"):
+                        content = inp.get("content", "")
+                        diffs.append({
+                            "tool": "Write",
+                            "file_path": inp["file_path"],
+                            "new_string": content,
+                            "unified_diff": f"--- /dev/null\n+++ b/{inp['file_path']}\n"
+                                            + "".join(f"+{l}" for l in content.splitlines(keepends=True)),
+                        })
+    except Exception as e:
+        print(f"[diff] parse error: {e}")
+    return diffs
+
+
+def send_webhook_notification(fix_id, fix):
+    """POST a fix-ready notification to the configured webhook URL."""
+    url = webhook_config.get("url")
+    if not url:
+        return
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "text": f"Fix ready for review: {fix.get('description', '')[:80]}",
+            "fixId": fix_id,
+            "issueClass": fix.get("issue_class"),
+            "confidence": fix.get("confidence"),
+            "status": fix.get("status"),
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=5)
+        print(f"[webhook] notified for fix {fix_id}")
+    except Exception as e:
+        print(f"[webhook] notification error: {e}")
 
 
 def capture_screenshot(fix_id, label="before"):
@@ -725,12 +917,11 @@ def capture_after_screenshot(fix_id):
     """Capture the 'after' screenshot for a completed fix.
 
     Called in a background thread that polls for session completion.
+    Also parses the session JSONL for code diffs and sends a webhook notification.
     """
     fix = active_fixes.get(fix_id)
     if not fix:
         return
-
-    session_id = fix["session_id"]
 
     # Poll for session completion (max 5 minutes)
     for _ in range(300):
@@ -742,12 +933,30 @@ def capture_after_screenshot(fix_id):
     time.sleep(2)
 
     after_path = capture_screenshot(fix_id, "after")
+    with _fixes_lock:
+        fix = active_fixes.get(fix_id)
+        if not fix:
+            return
+        if after_path:
+            fix["after_path"] = after_path
+            fix["status"] = "ready"
+            print(f"[snapshot] After screenshot captured: {after_path}")
+        else:
+            fix["status"] = "after_failed"
+        # Parse code diffs from the session JSONL
+        session_id = fix.get("session_id", "")
+        if session_id:
+            fix["diffs"] = parse_session_diffs(session_id)
+            fix["changed_files"] = list({d["file_path"] for d in fix["diffs"]})
+        _save_queue()
+
+    # Send webhook notification now that the fix is ready
     if after_path:
-        fix["after_path"] = after_path
-        fix["status"] = "ready"
-        print(f"[snapshot] After screenshot captured: {after_path}")
-    else:
-        fix["status"] = "after_failed"
+        threading.Thread(
+            target=send_webhook_notification,
+            args=(fix_id, fix),
+            daemon=True,
+        ).start()
 
 
 def build_devtools_prompt(action, description, context):
@@ -1091,25 +1300,80 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not fix:
                 self.send_json({"error": "Fix not found", "fixId": fix_id})
                 return
+            issue_class = fix.get("issue_class")
+            _, grad_rate, grad_total = check_graduation(issue_class)
+            stats = approval_history.get(issue_class, {}) if issue_class else {}
             self.send_json({
                 "fixId": fix_id,
                 "status": fix["status"],
                 "description": fix["description"],
+                "issueClass": issue_class,
+                "confidence": fix.get("confidence", 0.0),
                 "beforePath": fix.get("before_path"),
                 "afterPath": fix.get("after_path"),
                 "hasBeforeAfter": bool(fix.get("before_path") and fix.get("after_path")),
+                "changedFiles": fix.get("changed_files", []),
+                "outcome": fix.get("outcome"),
+                "graduationRate": grad_rate,
+                "graduationTotal": grad_total,
+                "isGraduated": stats.get("graduated", False),
             })
 
         elif parsed.path == "/api/fix/snapshots":
             # List all tracked fixes with snapshot status
             result = []
-            for fid, fix in active_fixes.items():
+            with _fixes_lock:
+                snapshot = dict(active_fixes)
+            for fid, fix in snapshot.items():
+                if fix.get("status") in ("approved", "rejected", "reverted"):
+                    continue  # hide resolved fixes from the queue
+                issue_class = fix.get("issue_class")
                 result.append({
                     "fixId": fid,
                     "status": fix["status"],
                     "description": fix["description"][:100],
+                    "issueClass": issue_class,
+                    "confidence": fix.get("confidence", 0.0),
                     "hasBeforeAfter": bool(fix.get("before_path") and fix.get("after_path")),
                 })
+            self.send_json(result)
+
+        elif parsed.path == "/api/fix/diff":
+            # Return parsed code diffs for a fix
+            params = parse_qs(parsed.query)
+            fix_id = params.get("id", [None])[0]
+            if not fix_id:
+                self.send_error(400, "Missing id parameter")
+                return
+            fix = active_fixes.get(fix_id)
+            if not fix:
+                self.send_json({"error": "Fix not found", "fixId": fix_id})
+                return
+            diffs = fix.get("diffs")
+            if diffs is None:
+                session_id = fix.get("session_id", "")
+                diffs = parse_session_diffs(session_id) if session_id else []
+                with _fixes_lock:
+                    active_fixes.get(fix_id, {})["diffs"] = diffs
+            self.send_json({"fixId": fix_id, "diffs": diffs})
+
+        elif parsed.path == "/api/fix/graduation-stats":
+            # Return per-class approval rates and graduation status
+            result = {}
+            with _fixes_lock:
+                hist = dict(approval_history)
+            for cls, stats in hist.items():
+                should_grad, rate, total = check_graduation(cls)
+                result[cls] = {
+                    "approved": stats.get("approved", 0),
+                    "partial": stats.get("partial", 0),
+                    "rejected": stats.get("rejected", 0),
+                    "total": total,
+                    "rate": rate,
+                    "graduated": stats.get("graduated", False),
+                    "autoApply": stats.get("auto_apply", False),
+                    "canGraduate": should_grad and not stats.get("graduated", False),
+                }
             self.send_json(result)
 
         elif parsed.path == "/api/themes":
@@ -1215,10 +1479,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             description = data.get("description", "").strip()
             context = data.get("context", {})
             fix_id = data.get("fixId")  # from bridge telemetry
+            issue_class = data.get("issueClass", "").strip() or None
 
             if not description:
                 self.send_error(400, "Missing description")
                 return
+
+            # Compute confidence for this fix
+            confidence = compute_confidence(issue_class)
+
+            # If class is graduated and confidence is high enough, skip HITL queue
+            cls_stats = approval_history.get(issue_class, {}) if issue_class else {}
+            auto_apply = cls_stats.get("auto_apply", False) and confidence >= CONFIDENCE_AUTO_APPLY_THRESHOLD
 
             # Capture "before" screenshot (non-blocking, quick)
             before_path = None
@@ -1242,13 +1514,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
             # Track fix for after-capture
             if fix_id:
-                active_fixes[fix_id] = {
-                    "session_id": result_id,
-                    "description": description,
-                    "before_path": before_path,
-                    "after_path": None,
-                    "status": "running",
-                }
+                with _fixes_lock:
+                    active_fixes[fix_id] = {
+                        "session_id": result_id,
+                        "description": description,
+                        "issue_class": issue_class,
+                        "confidence": confidence,
+                        "before_path": before_path,
+                        "after_path": None,
+                        "status": "running",
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "resolved_at": None,
+                        "outcome": None,
+                        "changed_files": [],
+                        "diffs": None,
+                        "auto_applied": auto_apply,
+                    }
+                    _save_queue()
                 # Start background thread to capture "after" screenshot
                 threading.Thread(
                     target=capture_after_screenshot,
@@ -1263,8 +1545,163 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "action": action,
                 "description": description,
                 "fixId": fix_id,
+                "issueClass": issue_class,
+                "confidence": confidence,
+                "autoApplied": auto_apply,
                 "beforeScreenshot": before_path is not None,
             })
+
+        elif parsed.path == "/api/fix/resolve":
+            # Approve / Partial / Reject a fix and update approval history
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_error(400, "Invalid JSON")
+                return
+            fix_id = data.get("fixId")
+            outcome = data.get("outcome")  # "success" | "partial" | "failure"
+            if not fix_id or outcome not in ("success", "partial", "failure"):
+                self.send_error(400, "Missing fixId or invalid outcome")
+                return
+            with _fixes_lock:
+                fix = active_fixes.get(fix_id)
+                if not fix:
+                    self.send_json({"error": "Fix not found", "fixId": fix_id})
+                    return
+                fix["outcome"] = outcome
+                fix["resolved_at"] = datetime.now(timezone.utc).isoformat()
+                fix["status"] = "approved" if outcome == "success" else (
+                    "partial" if outcome == "partial" else "rejected"
+                )
+                # Update per-class approval history
+                issue_class = fix.get("issue_class")
+                if issue_class:
+                    if issue_class not in approval_history:
+                        approval_history[issue_class] = {
+                            "approved": 0, "partial": 0, "rejected": 0,
+                            "total": 0, "graduated": False, "auto_apply": False,
+                        }
+                    cls = approval_history[issue_class]
+                    cls["total"] += 1
+                    if outcome == "success":
+                        cls["approved"] += 1
+                    elif outcome == "partial":
+                        cls["partial"] += 1
+                    else:
+                        cls["rejected"] += 1
+                    # Regression detection: revoke auto-apply if a graduated fix fails
+                    if outcome == "failure" and cls.get("auto_apply"):
+                        cls["auto_apply"] = False
+                        cls["graduated"] = False
+                        print(f"[graduation] Revoked auto-apply for class '{issue_class}' due to failure")
+                    _save_approval_history()
+                _save_queue()
+                should_grad, rate, total = check_graduation(issue_class) if issue_class else (False, 0, 0)
+            self.send_json({
+                "ok": True,
+                "fixId": fix_id,
+                "outcome": outcome,
+                "issueClass": issue_class,
+                "canGraduate": should_grad,
+                "graduationRate": rate,
+                "graduationTotal": total,
+            })
+
+        elif parsed.path == "/api/fix/revert":
+            # Revert changed files for a rejected fix via git checkout
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_error(400, "Invalid JSON")
+                return
+            fix_id = data.get("fixId")
+            if not fix_id:
+                self.send_error(400, "Missing fixId")
+                return
+            fix = active_fixes.get(fix_id)
+            if not fix:
+                self.send_json({"error": "Fix not found", "fixId": fix_id})
+                return
+            changed_files = fix.get("changed_files", [])
+            if not changed_files:
+                self.send_json({"ok": True, "reverted": [], "note": "no changed files tracked"})
+                return
+            reverted = []
+            errors = []
+            for fp in changed_files:
+                try:
+                    result = subprocess.run(
+                        ["git", "checkout", "--", fp],
+                        capture_output=True, text=True, timeout=10,
+                        cwd=str(SCRIPT_DIR),
+                    )
+                    if result.returncode == 0:
+                        reverted.append(fp)
+                    else:
+                        errors.append({"file": fp, "error": result.stderr.strip()})
+                except Exception as e:
+                    errors.append({"file": fp, "error": str(e)})
+            with _fixes_lock:
+                if fix_id in active_fixes:
+                    active_fixes[fix_id]["status"] = "reverted"
+                _save_queue()
+            self.send_json({"ok": True, "reverted": reverted, "errors": errors})
+
+        elif parsed.path == "/api/fix/graduate":
+            # Graduate a class from HITL review to autonomous operation
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_error(400, "Invalid JSON")
+                return
+            issue_class = data.get("issueClass", "").strip()
+            if not issue_class:
+                self.send_error(400, "Missing issueClass")
+                return
+            with _fixes_lock:
+                if issue_class not in approval_history:
+                    self.send_json({"error": "No history for class", "issueClass": issue_class})
+                    return
+                should_grad, rate, total = check_graduation(issue_class)
+                if not should_grad:
+                    self.send_json({
+                        "error": "Class does not meet graduation criteria",
+                        "issueClass": issue_class,
+                        "rate": rate,
+                        "total": total,
+                        "required_rate": GRADUATION_MIN_RATE,
+                        "required_total": GRADUATION_MIN_FIXES,
+                    })
+                    return
+                approval_history[issue_class]["graduated"] = True
+                approval_history[issue_class]["auto_apply"] = True
+                _save_approval_history()
+                print(f"[graduation] Class '{issue_class}' graduated (rate={rate}, total={total})")
+            self.send_json({
+                "ok": True,
+                "issueClass": issue_class,
+                "rate": rate,
+                "total": total,
+                "graduated": True,
+            })
+
+        elif parsed.path == "/api/fix/webhook":
+            # Configure webhook URL for fix notifications
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_error(400, "Invalid JSON")
+                return
+            url = data.get("url", "").strip() or None
+            sound = bool(data.get("sound", False))
+            webhook_config["url"] = url
+            webhook_config["sound"] = sound
+            try:
+                with open(WEBHOOK_CONFIG_FILE, "w") as f:
+                    json.dump(webhook_config, f, indent=2)
+            except Exception as e:
+                print(f"[webhook] config save error: {e}")
+            self.send_json({"ok": True, "url": url, "sound": sound})
 
         else:
             self.send_error(404, "Not found")

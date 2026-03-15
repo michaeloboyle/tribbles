@@ -6,3 +6,10 @@ __pycache__/
 *.pyc
 analyses/
 fix-snapshots/
+fix-queue.json
+fix-approval-history.json
+fix-webhook.json
+test-results/
+test-results.json
+junit.xml
+playwright-report/
