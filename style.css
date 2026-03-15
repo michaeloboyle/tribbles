@@ -353,6 +353,13 @@ body {
 .msg-role.result { color: var(--text-dim); }
 .msg-role.thinking { color: var(--accent-thinking); }
 
+.claude-logo {
+  margin-right: 6px;
+  color: var(--accent-text);
+  vertical-align: middle;
+  display: inline-block;
+}
+
 .msg-time {
   color: var(--text-dim);
   font-size: 10px;

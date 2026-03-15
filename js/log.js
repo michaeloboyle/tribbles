@@ -43,7 +43,12 @@ export default class MessageLog {
         break;
       case 'assistant_text':
         div.innerHTML = `
-          <div class="msg-header"><span class="msg-role assistant">Claude</span>
+          <div class="msg-header">
+            <svg class="claude-logo" viewBox="0 0 100 100" width="16" height="16" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="50" cy="30" r="18" fill="currentColor" opacity="0.9"/>
+              <path d="M30 60 Q30 45 50 45 Q70 45 70 60 Q70 75 50 75 Q30 75 30 60" fill="currentColor" opacity="0.7"/>
+            </svg>
+            <span class="msg-role assistant">Claude</span>
             ${step.timestamp ? `<span class="msg-time">${this.fmtTime(step.timestamp)}</span>` : ''}</div>
           <div class="msg-body">${esc(trunc(step.text, 200))}</div>`;
         break;
