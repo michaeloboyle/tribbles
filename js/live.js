@@ -35,8 +35,16 @@ export function startLive(sessionId) {
     const text = JSON.parse(e.data);
     session = parser.parse(text);
 
+    // Clear previous graph completely before creating new renderer
+    const svgElement = document.getElementById('graph');
+    svgElement.innerHTML = ''; // Clear all children
+
+    // Reset zoom display
+    const zoomDisplay = document.getElementById('zoom-level');
+    if (zoomDisplay) zoomDisplay.textContent = '100%';
+
     graphModel = new GraphModel();
-    renderer = new GraphRenderer(document.getElementById('graph'));
+    renderer = new GraphRenderer(svgElement);
     messageLog = new MessageLog(document.getElementById('messages-container'));
     controller = new AnimationController(session, graphModel, renderer, messageLog);
 
