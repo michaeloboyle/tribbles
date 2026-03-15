@@ -1,4 +1,4 @@
-import { esc } from './utils.js';
+import { esc, openFile } from './utils.js';
 import { TOOL_COLORS } from './graph.js';
 import { startReplay } from './replay.js';
 import { startLive } from './live.js';
@@ -121,12 +121,12 @@ function renderDayHtml(dayKey, daySessions) {
   const topFiles = Object.entries(dayFiles).sort((a, b) => b[1] - a[1]).slice(0, 3);
   const topDirs = Object.entries(dayDirs).sort((a, b) => b[1] - a[1]).slice(0, 2);
   const fileChipsDay = topFiles.map(([name, count]) =>
-    `<span class="session-file-chip">📄 ${name} ${count}</span>`
+    `<span class="session-file-chip" data-file="${esc(name)}">📄 ${name} ${count}</span>`
   ).join('');
   const dirChipsDay = topDirs.map(([name, count]) =>
-    `<span class="session-dir-chip">📁 ${name} ${count}</span>`
+    `<span class="session-dir-chip" data-dir="${esc(name)}">📁 ${name} ${count}</span>`
   ).join('');
-  const fileRefChips = fileChipsDay + dirChipsDay;
+  const fileRefChips = dirChipsDay + fileChipsDay;
 
   let out = `<div class="day-summary-card" data-day="${dayKey}">
     <span class="day-summary-date">${dayLabel}</span>
@@ -142,12 +142,12 @@ function renderDayHtml(dayKey, daySessions) {
   for (const s of daySessions) {
     const isActive = s.active;
     const fileChips = Object.entries(s.fileCounts || {}).slice(0, 4).map(([name, count]) =>
-      `<span class="session-file-chip">📄 ${name} ${count}</span>`
+      `<span class="session-file-chip" data-file="${esc(name)}">📄 ${name} ${count}</span>`
     ).join('');
     const dirChips = Object.entries(s.dirCounts || {}).slice(0, 2).map(([name, count]) =>
-      `<span class="session-dir-chip">📁 ${name} ${count}</span>`
+      `<span class="session-dir-chip" data-dir="${esc(name)}">📁 ${name} ${count}</span>`
     ).join('');
-    const toolChips = fileChips + dirChips;
+    const toolChips = dirChips + fileChips;
 
     const startDate = s.startTime ? new Date(s.startTime) : null;
     const endDate = s.endTime ? new Date(s.endTime) : null;
@@ -318,8 +318,24 @@ export function renderSessionBrowser(sessions) {
     }, { signal: sig });
   });
 
-  // Delegated click: session cards + buttons
+  // Delegated click: file/directory chips, session cards + buttons
   list.addEventListener('click', (e) => {
+    // Handle file chip clicks
+    const fileChip = e.target.closest('.session-file-chip');
+    if (fileChip) {
+      e.stopPropagation();
+      const fileName = fileChip.dataset.file;
+      if (fileName) openFile(fileName);
+      return;
+    }
+    // Handle directory chip clicks
+    const dirChip = e.target.closest('.session-dir-chip');
+    if (dirChip) {
+      e.stopPropagation();
+      const dirName = dirChip.dataset.dir;
+      if (dirName) openFile(dirName);
+      return;
+    }
     const btn = e.target.closest('.session-btn');
     if (btn) {
       e.stopPropagation();

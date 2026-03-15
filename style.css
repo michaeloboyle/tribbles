@@ -995,8 +995,7 @@ body {
 }
 
 .session-actions {
-  display: flex;
-  gap: 6px;
+  display: none;
 }
 
 .session-btn {
@@ -1224,11 +1223,6 @@ body {
 .session-btn.continue-btn:hover {
   background: var(--accent-user);
   color: #fff;
-}
-
-/* Hide action buttons when continue input is open (card is "expanded") */
-.session-card:has(.session-continue-input) .session-actions {
-  display: none;
 }
 
 .session-continue-input {
