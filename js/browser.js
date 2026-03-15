@@ -107,6 +107,27 @@ function renderDayHtml(dayKey, daySessions) {
     return `<span class="session-tool-chip" style="background:${color}">${name} ${count}</span>`;
   }).join('');
 
+  // Aggregate files and directories across day summary
+  const dayFiles = {};
+  const dayDirs = {};
+  for (const s of daySessions) {
+    for (const [file, count] of Object.entries(s.fileCounts || {})) {
+      dayFiles[file] = (dayFiles[file] || 0) + count;
+    }
+    for (const [dir, count] of Object.entries(s.dirCounts || {})) {
+      dayDirs[dir] = (dayDirs[dir] || 0) + count;
+    }
+  }
+  const topFiles = Object.entries(dayFiles).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const topDirs = Object.entries(dayDirs).sort((a, b) => b[1] - a[1]).slice(0, 2);
+  const fileChipsDay = topFiles.map(([name, count]) =>
+    `<span class="session-file-chip">📄 ${name} ${count}</span>`
+  ).join('');
+  const dirChipsDay = topDirs.map(([name, count]) =>
+    `<span class="session-dir-chip">📁 ${name} ${count}</span>`
+  ).join('');
+  const fileRefChips = fileChipsDay + dirChipsDay;
+
   let out = `<div class="day-summary-card" data-day="${dayKey}">
     <span class="day-summary-date">${dayLabel}</span>
     <div class="day-summary-stats">
@@ -115,15 +136,18 @@ function renderDayHtml(dayKey, daySessions) {
       <span>${sizeMB} MB</span>
       ${compTag}
     </div>
-    <div class="day-summary-tools">${toolChipsDay}</div>
+    <div class="day-summary-tools">${fileRefChips || toolChipsDay}</div>
   </div>`;
 
   for (const s of daySessions) {
     const isActive = s.active;
-    const toolChips = Object.entries(s.toolCounts || {}).slice(0, 6).map(([name, count]) => {
-      const color = TOOL_COLORS[name] || '#6a6a8a';
-      return `<span class="session-tool-chip" style="background:${color}">${name} ${count}</span>`;
-    }).join('');
+    const fileChips = Object.entries(s.fileCounts || {}).slice(0, 4).map(([name, count]) =>
+      `<span class="session-file-chip">📄 ${name} ${count}</span>`
+    ).join('');
+    const dirChips = Object.entries(s.dirCounts || {}).slice(0, 2).map(([name, count]) =>
+      `<span class="session-dir-chip">📁 ${name} ${count}</span>`
+    ).join('');
+    const toolChips = fileChips + dirChips;
 
     const startDate = s.startTime ? new Date(s.startTime) : null;
     const endDate = s.endTime ? new Date(s.endTime) : null;

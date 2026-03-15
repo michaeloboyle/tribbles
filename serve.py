@@ -282,6 +282,57 @@ class ClaudeProcess:
         return matches[0] if matches else None
 
 
+def _extract_files_from_tool(tool_name, input_data, file_counts, dir_counts):
+    """Extract file paths and directories from a tool's input parameters."""
+    if not isinstance(input_data, dict):
+        return
+
+    paths = []
+
+    if tool_name in ("Read", "Write", "NotebookEdit"):
+        if "file_path" in input_data:
+            paths.append(input_data["file_path"])
+        if "notebook_path" in input_data:
+            paths.append(input_data["notebook_path"])
+    elif tool_name == "Edit":
+        if "file_path" in input_data:
+            paths.append(input_data["file_path"])
+    elif tool_name in ("Glob", "Grep"):
+        if "path" in input_data:
+            paths.append(input_data["path"])
+    elif tool_name == "Bash":
+        cmd = input_data.get("command", "")
+        # Extract quoted paths and common command paths
+        import re
+        for m in re.finditer(r'"(\/[^"]{2,})"', cmd):
+            paths.append(m.group(1))
+        for m in re.finditer(r"'(\/[^']{2,})'", cmd):
+            paths.append(m.group(1))
+    elif tool_name == "WebFetch":
+        if "url" in input_data:
+            paths.append(input_data["url"])
+
+    # Count files and directories
+    for path in paths:
+        if not path:
+            continue
+        # Get the directory (parent path) and file name
+        path = path.rstrip('/')
+        dir_path = path.rsplit('/', 1)[0] if '/' in path else path
+        file_name = path.rsplit('/', 1)[1] if '/' in path else path
+
+        # Count the file
+        if file_name:
+            file_counts[file_name] = file_counts.get(file_name, 0) + 1
+
+        # Count the directory
+        if dir_path and dir_path != path:
+            # Extract just the last component of the directory path
+            dir_name = dir_path.rsplit('/', 1)[1] if '/' in dir_path else dir_path
+            if dir_name:
+                dir_counts[dir_name] = dir_counts.get(dir_name, 0) + 1
+
+
 def scan_sessions():
     """Scan all project directories for session .jsonl files."""
     sessions = []
@@ -326,6 +377,8 @@ def scan_sessions():
                 "firstMessage": meta.get("firstMessage", ""),
                 "stepEstimate": meta.get("stepEstimate", 0),
                 "toolCounts": meta.get("toolCounts", {}),
+                "fileCounts": meta.get("fileCounts", {}),
+                "dirCounts": meta.get("dirCounts", {}),
                 "active": is_active,
                 "modifiedAgo": human_age(age_seconds),
             })
@@ -374,6 +427,8 @@ def extract_metadata(path):
     cwd = None
     visualizable = 0
     tool_counts = {}
+    file_counts = {}
+    dir_counts = {}
 
     for line in lines:
         line = line.strip()
@@ -424,6 +479,9 @@ def extract_metadata(path):
                     if block.get("type") == "tool_use":
                         name = block.get("name", "unknown")
                         tool_counts[name] = tool_counts.get(name, 0) + 1
+                        # Extract files and directories from tool inputs
+                        input_data = block.get("input", {})
+                        _extract_files_from_tool(name, input_data, file_counts, dir_counts)
 
     if not first_timestamp:
         return None
@@ -444,6 +502,8 @@ def extract_metadata(path):
     meta["firstMessage"] = first_user_msg or "(no user message)"
     meta["stepEstimate"] = visualizable
     meta["toolCounts"] = tool_counts
+    meta["fileCounts"] = file_counts
+    meta["dirCounts"] = dir_counts
     return meta
 
 

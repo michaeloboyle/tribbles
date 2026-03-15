@@ -1044,6 +1044,23 @@ body {
   opacity: 0.8;
 }
 
+.session-file-chip,
+.session-dir-chip {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--accent-read-15);
+  color: var(--accent-read);
+  border: 1px solid var(--accent-read-25);
+  white-space: nowrap;
+}
+
+.session-dir-chip {
+  background: var(--accent-web-15);
+  color: var(--accent-web);
+  border-color: var(--accent-web-25);
+}
+
 /* ── Live Indicator ── */
 #live-indicator {
   display: none;
