@@ -2,10 +2,71 @@ import { esc, trunc, openFile } from './utils.js';
 import { basename } from './graph.js';
 import { getToolIcon, isDataUri } from './theme.js';
 
+const ZONE_COLORS = {
+  autonomous: '#4ade80',
+  'post-hoc': '#60a5fa',
+  escalated: '#fbbf24',
+};
+
 export default class MessageLog {
   constructor(container) {
     this.container = container;
     this.entries = [];
+    this.activitySource = null;
+    this.currentSessionId = null;
+  }
+
+  /** Start streaming cross-repo activity events inline */
+  startActivityStream(sessionId) {
+    this.stopActivityStream();
+    this.currentSessionId = sessionId;
+    this.activitySource = new EventSource('/api/activity');
+
+    this.activitySource.addEventListener('activity', (e) => {
+      try {
+        const event = JSON.parse(e.data);
+        // Skip events from this session (already shown as tool calls)
+        if (event.session === sessionId) return;
+        // Skip post-edit/post-command (duplicates pre- events)
+        if (event.action.startsWith('post-')) return;
+        this.addActivityEvent(event);
+      } catch { /* skip malformed */ }
+    });
+  }
+
+  stopActivityStream() {
+    if (this.activitySource) {
+      this.activitySource.close();
+      this.activitySource = null;
+    }
+  }
+
+  addActivityEvent(event) {
+    const div = document.createElement('div');
+    div.className = 'msg-entry activity-entry';
+
+    const zone = event.zone || 'autonomous';
+    const color = ZONE_COLORS[zone] || '#94a3b8';
+    const time = event.ts ? event.ts.split('T')[1]?.replace('Z', '').substring(0, 8) || '' : '';
+    const target = (event.target || '').split('/').slice(-2).join('/');
+    const tool = event.tool || event.action;
+
+    div.innerHTML = `
+      <div class="msg-header">
+        <span class="activity-badge" style="color:${color}" title="${zone}">\u25c6</span>
+        <span class="msg-role" style="color:${color}">${esc(event.repo)}</span>
+        ${time ? `<span class="msg-time">${time}</span>` : ''}
+      </div>
+      <div class="msg-body"><code style="color:var(--text-dim)">${esc(tool)}</code> ${esc(trunc(target, 60))}</div>`;
+
+    // Flash effect
+    div.style.borderLeft = `2px solid ${color}`;
+    this.container.appendChild(div);
+    div.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    // Fade flash
+    div.style.background = `${color}15`;
+    setTimeout(() => { div.style.background = ''; }, 1500);
   }
 
   addStep(step) {

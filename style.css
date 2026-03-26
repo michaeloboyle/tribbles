@@ -1555,6 +1555,18 @@ body:has(#landing.sidebar) #sidebar-resize:hover,
 }
 #fix-review-badge.has-fixes { display: block; }
 
+/* === Inline Activity Events (in session log) === */
+
+.activity-entry {
+  transition: background 1s;
+  padding-left: 6px;
+}
+
+.activity-badge {
+  font-size: 12px;
+  margin-right: 2px;
+}
+
 /* === Activity Dashboard === */
 
 #view-tabs {

@@ -45,7 +45,9 @@ export function startLive(sessionId) {
 
     graphModel = new GraphModel();
     renderer = new GraphRenderer(svgElement);
-    messageLog = new MessageLog(document.getElementById('messages-container'));
+    const msgContainer = document.getElementById('messages-container');
+    messageLog = new MessageLog(msgContainer);
+    msgContainer._messageLog = messageLog;  // ref for stopLive cleanup
     controller = new AnimationController(session, graphModel, renderer, messageLog);
 
     buildLegend();
@@ -54,6 +56,9 @@ export function startLive(sessionId) {
     // Jump to end and show everything
     controller.jumpToEnd();
     initialized = true;
+
+    // Start cross-repo activity stream inline
+    messageLog.startActivityStream(sessionId);
 
     // Fit view after settling
     setTimeout(() => renderer.fitView(), 1000);
@@ -105,5 +110,8 @@ export function stopLive() {
     liveEventSource.close();
     liveEventSource = null;
   }
+  // Stop cross-repo activity stream
+  const msgContainer = document.getElementById('messages-container');
+  if (msgContainer?._messageLog) msgContainer._messageLog.stopActivityStream();
   document.getElementById('live-indicator').classList.remove('visible');
 }
