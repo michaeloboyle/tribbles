@@ -4,9 +4,37 @@ import { startLive } from './live.js';
 import { startReplay } from './replay.js';
 import { getPromptManager } from './prompt.js';
 import { initResize } from './resize.js';
+import { initActivity, stopActivity } from './activity.js';
 import './fix-review.js';
 
 initResize();
+
+// View tab switching (Sessions vs Activity)
+document.querySelectorAll('.view-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.view-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+
+    const view = tab.dataset.view;
+    const sessionFilters = document.getElementById('session-filters');
+    const sessionList = document.getElementById('session-list');
+    const activityView = document.getElementById('activity-view');
+
+    if (view === 'activity') {
+      if (sessionFilters) sessionFilters.classList.add('hidden');
+      if (sessionList) sessionList.classList.add('hidden');
+      if (activityView) {
+        activityView.classList.remove('hidden');
+        initActivity(activityView);
+      }
+    } else {
+      if (sessionFilters) sessionFilters.classList.remove('hidden');
+      if (sessionList) sessionList.classList.remove('hidden');
+      if (activityView) activityView.classList.add('hidden');
+      stopActivity();
+    }
+  });
+});
 
 // Refresh button
 document.getElementById('btn-refresh')?.addEventListener('click', async () => {

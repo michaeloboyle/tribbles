@@ -1554,3 +1554,197 @@ body:has(#landing.sidebar) #sidebar-resize:hover,
   #zoom-group { opacity: 0.6; }
 }
 #fix-review-badge.has-fixes { display: block; }
+
+/* === Activity Dashboard === */
+
+#view-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.view-tab {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 4px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  border-radius: 4px 4px 0 0;
+  transition: all 0.15s;
+}
+
+.view-tab.active {
+  background: var(--bg-panel);
+  color: var(--text-bright);
+  border-bottom-color: var(--bg-panel);
+}
+
+.view-tab:hover:not(.active) {
+  background: var(--bg-card-active);
+  color: var(--text);
+}
+
+#activity-view {
+  width: 100%;
+  max-width: 900px;
+}
+
+#activity-dashboard {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--text);
+}
+
+#activity-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+#activity-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin: 0;
+}
+
+#activity-status {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+#activity-body {
+  display: flex;
+  gap: 16px;
+  padding: 12px 0;
+  min-height: 300px;
+}
+
+#repo-graph {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.repo-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.repo-bar.repo-active .repo-name {
+  color: #4ade80;
+}
+
+.repo-name {
+  flex: 0 0 100px;
+  color: var(--text);
+  font-size: 11px;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-meter {
+  flex: 1;
+  height: 8px;
+  background: var(--bg-card);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.repo-fill {
+  height: 100%;
+  background: var(--accent-user);
+  border-radius: 4px;
+  transition: width 0.3s;
+}
+
+.repo-count {
+  flex: 0 0 30px;
+  color: var(--text-dim);
+  font-size: 10px;
+  text-align: right;
+}
+
+#activity-timeline {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 500px;
+}
+
+.activity-row {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  transition: background 0.5s;
+  align-items: baseline;
+}
+
+.activity-time {
+  flex: 0 0 60px;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.activity-icon {
+  flex: 0 0 12px;
+  font-size: 10px;
+}
+
+.activity-zone {
+  flex: 0 0 70px;
+  font-size: 10px;
+}
+
+.activity-repo {
+  flex: 0 0 90px;
+  color: var(--accent-user);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-action {
+  flex: 0 0 80px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.activity-target {
+  flex: 1;
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#activity-footer {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.zone-chip {
+  font-size: 12px;
+  margin-right: 16px;
+}
+
+.no-data {
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 20px;
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  #activity-body { flex-direction: column; }
+  #repo-graph { flex: none; }
+}

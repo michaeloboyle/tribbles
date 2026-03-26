@@ -26,6 +26,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 CLAUDE_DIR = Path.home() / ".claude" / "projects"
+ACTIVITY_LOG = Path.home() / ".claude" / "activity.jsonl"
 PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8777
 LIVE_MODE = "--live" in sys.argv
 SCRIPT_DIR = Path(__file__).parent
@@ -1093,6 +1094,62 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                             time.sleep(0.3)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+
+        elif parsed.path == "/api/activity":
+            # SSE endpoint: tail ~/.claude/activity.jsonl for cross-repo events
+            if not ACTIVITY_LOG.exists():
+                self.send_error(404, "No activity log found")
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            try:
+                with open(ACTIVITY_LOG, "r") as f:
+                    # Send existing events as initial batch
+                    existing = f.readlines()
+                    # Send last 200 events to avoid flooding
+                    for line in existing[-200:]:
+                        stripped = line.strip()
+                        if stripped:
+                            self.wfile.write(f"event: activity\ndata: {stripped}\n\n".encode())
+                    self.wfile.flush()
+
+                    # Tail for new events
+                    while True:
+                        line = f.readline()
+                        if line:
+                            stripped = line.strip()
+                            if stripped:
+                                self.wfile.write(f"event: activity\ndata: {stripped}\n\n".encode())
+                                self.wfile.flush()
+                        else:
+                            self.wfile.write(b": heartbeat\n\n")
+                            self.wfile.flush()
+                            time.sleep(0.5)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        elif parsed.path == "/api/activity/recent":
+            # Non-SSE: return last N activity events as JSON array
+            params = parse_qs(parsed.query)
+            limit = int(params.get("limit", ["100"])[0])
+            events = []
+            if ACTIVITY_LOG.exists():
+                with open(ACTIVITY_LOG, "r") as f:
+                    lines = f.readlines()
+                for line in lines[-limit:]:
+                    stripped = line.strip()
+                    if stripped:
+                        try:
+                            events.append(json.loads(stripped))
+                        except json.JSONDecodeError:
+                            pass
+            self.send_json(events)
 
         elif parsed.path == "/api/active":
             # Return the most recently active session

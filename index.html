@@ -19,7 +19,10 @@
     </div>
     <div id="session-browser" class="hidden">
       <div id="browser-header">
-        <h2>Sessions</h2>
+        <div id="view-tabs">
+          <button class="view-tab active" data-view="sessions">Sessions</button>
+          <button class="view-tab" data-view="activity">Activity</button>
+        </div>
         <div id="day-nav">
           <button id="btn-day-prev" title="Older day (←)" disabled>←</button>
           <span id="day-nav-label"></span>
@@ -38,6 +41,7 @@
       </div>
       <div id="session-list"></div>
     </div>
+    <div id="activity-view" class="hidden"></div>
   </div>
 </div>
 
