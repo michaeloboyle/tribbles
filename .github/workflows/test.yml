@@ -1,0 +1,20 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    name: python unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # serve.py and the tests use only the standard library, so there is
+      # nothing to install. unittest discovery picks up any tests/test_*.py.
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
