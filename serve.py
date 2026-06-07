@@ -580,9 +580,55 @@ _analysis_lock = threading.Lock()
 _analysis_generating = set()  # keys currently being generated
 _analysis_semaphore = threading.Semaphore(2)  # max 2 concurrent
 
+# A failed generation writes a `{key}.failed` marker (containing the failure
+# timestamp) instead of leaving no trace. Without this, a day whose analysis
+# fails to parse re-spawns a fresh headless Claude session on EVERY dashboard
+# load. The cooldown lets a transient failure self-heal: after it elapses,
+# exactly one retry is allowed.
+ANALYSIS_FAIL_COOLDOWN = 24 * 3600  # seconds
+
 
 def _analysis_exists(key):
     return (ANALYSES_DIR / f"{key}.json").exists()
+
+
+def _analysis_failed_marker(key):
+    return ANALYSES_DIR / f"{key}.failed"
+
+
+def _analysis_blocked(key, now=None):
+    """True when generation should be SKIPPED (no new session minted): a
+    cached analysis exists, or a recent failure is still within cooldown."""
+    if _analysis_exists(key):
+        return True
+    marker = _analysis_failed_marker(key)
+    if marker.exists():
+        if now is None:
+            now = time.time()
+        try:
+            last = float(marker.read_text().strip() or 0)
+        except (ValueError, OSError):
+            last = 0.0
+        if now - last < ANALYSIS_FAIL_COOLDOWN:
+            return True
+    return False
+
+
+def _record_analysis_failure(key):
+    """Negative-cache a failed generation so it doesn't retry every load."""
+    try:
+        ANALYSES_DIR.mkdir(exist_ok=True)
+        _analysis_failed_marker(key).write_text(str(time.time()))
+    except OSError:
+        pass
+
+
+def _clear_analysis_failure(key):
+    """Drop a stale failure marker once the analysis succeeds."""
+    try:
+        _analysis_failed_marker(key).unlink()
+    except OSError:
+        pass
 
 
 def _build_analysis_prompt(day_data_list, start_date, end_date, period):
@@ -641,7 +687,7 @@ def _run_analysis(key, day_data_list, start_date, end_date, period):
         return
     try:
         out_path = ANALYSES_DIR / f"{key}.json"
-        if out_path.exists():
+        if _analysis_blocked(key):
             return
 
         prompt = _build_analysis_prompt(day_data_list, start_date, end_date, period)
@@ -655,6 +701,7 @@ def _run_analysis(key, day_data_list, start_date, end_date, period):
 
         if result.returncode != 0 or not result.stdout.strip():
             print(f"[analysis] Claude returned {result.returncode} for {key}")
+            _record_analysis_failure(key)
             return
 
         text = result.stdout.strip()
@@ -673,14 +720,18 @@ def _run_analysis(key, day_data_list, start_date, end_date, period):
 
         ANALYSES_DIR.mkdir(exist_ok=True)
         out_path.write_text(json.dumps(analysis, indent=2))
+        _clear_analysis_failure(key)
         print(f"[analysis] Generated {key}")
 
     except json.JSONDecodeError as e:
         print(f"[analysis] JSON parse error for {key}: {e}")
+        _record_analysis_failure(key)
     except subprocess.TimeoutExpired:
         print(f"[analysis] Timeout generating {key}")
+        _record_analysis_failure(key)
     except Exception as e:
         print(f"[analysis] Error generating {key}: {e}")
+        _record_analysis_failure(key)
     finally:
         _analysis_semaphore.release()
         with _analysis_lock:
@@ -703,7 +754,7 @@ def trigger_analysis_generation():
             continue
         key = f"{date}_{date}"
         with _analysis_lock:
-            if key in _analysis_generating or _analysis_exists(key):
+            if key in _analysis_generating or _analysis_blocked(key):
                 continue
             _analysis_generating.add(key)
         threading.Thread(
@@ -730,7 +781,7 @@ def trigger_analysis_generation():
             continue
         key = f"{start}_{end}"
         with _analysis_lock:
-            if key in _analysis_generating or _analysis_exists(key):
+            if key in _analysis_generating or _analysis_blocked(key):
                 continue
             _analysis_generating.add(key)
         threading.Thread(
